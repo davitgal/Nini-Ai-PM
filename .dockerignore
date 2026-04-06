@@ -1,0 +1,11 @@
+**/.git
+**/__pycache__
+**/.venv
+**/node_modules
+**/.env
+**/.env.local
+**/dist
+**/.DS_Store
+*.md
+.claude/
+docker-compose*.yml
