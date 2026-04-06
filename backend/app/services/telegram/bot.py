@@ -9,8 +9,14 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import Message, TelegramObject
 
+from sqlalchemy import select
+
 from app.config import settings
+from app.database import async_session_factory
+from app.dependencies import DAVIT_USER_ID
+from app.models.workspace import Workspace
 from app.services.ai.nini_brain import NiniBrain
+from app.services.sync_engine import SyncEngine
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +91,7 @@ async def cmd_clear(message: Message) -> None:
 
 @router.message(Command("tasks"))
 async def cmd_tasks(message: Message) -> None:
+    await _auto_sync_if_needed(message)
     await message.chat.do("typing")
     response = await brain.chat(
         message.chat.id,
@@ -95,6 +102,7 @@ async def cmd_tasks(message: Message) -> None:
 
 @router.message(Command("overdue"))
 async def cmd_overdue(message: Message) -> None:
+    await _auto_sync_if_needed(message)
     await message.chat.do("typing")
     response = await brain.chat(
         message.chat.id,
@@ -105,6 +113,7 @@ async def cmd_overdue(message: Message) -> None:
 
 @router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
+    await _auto_sync_if_needed(message)
     await message.chat.do("typing")
     response = await brain.chat(
         message.chat.id,
@@ -115,6 +124,7 @@ async def cmd_stats(message: Message) -> None:
 
 @router.message(Command("briefing"))
 async def cmd_briefing(message: Message) -> None:
+    await _auto_sync_if_needed(message)
     await message.chat.do("typing")
     response = await brain.chat(
         message.chat.id,
@@ -123,11 +133,63 @@ async def cmd_briefing(message: Message) -> None:
     await message.answer(_truncate(response))
 
 
+async def _auto_sync_if_needed(message: Message) -> bool:
+    """Run full sync if 30+ min since last interaction. Returns True if sync ran."""
+    chat_id = message.chat.id
+    if not brain.needs_sync(chat_id):
+        brain.touch_activity(chat_id)
+        return False
+
+    brain.touch_activity(chat_id)
+    await message.answer("Сек, гляну что у нас там поменялось... 🔄")
+    await message.chat.do("typing")
+
+    try:
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(Workspace).where(
+                    Workspace.user_id == DAVIT_USER_ID,
+                    Workspace.sync_enabled.is_(True),
+                )
+            )
+            workspaces = result.scalars().all()
+
+            engine = SyncEngine(db, DAVIT_USER_ID)
+            total_created, total_updated, total_archived = 0, 0, 0
+            for ws in workspaces:
+                try:
+                    sr = await engine.full_sync(ws)
+                    total_created += sr.created
+                    total_updated += sr.updated
+                    total_archived += sr.archived
+                except Exception:
+                    logger.exception("Auto-sync failed for %s", ws.name)
+
+        parts = []
+        if total_created:
+            parts.append(f"+{total_created} новых")
+        if total_updated:
+            parts.append(f"{total_updated} обновлено")
+        if total_archived:
+            parts.append(f"{total_archived} в архив")
+        if parts:
+            await message.answer(f"Синк готов: {', '.join(parts)}. Давай, что у тебя?")
+        else:
+            await message.answer("Всё актуально, ничего нового. Давай, что у тебя?")
+    except Exception:
+        logger.exception("Auto-sync error")
+        await message.answer("Синк не прошёл, но ладно — работаем с тем что есть. Что хотел?")
+
+    return True
+
+
 @router.message(F.text)
 async def handle_message(message: Message) -> None:
     """Forward free-text messages to Nini Brain."""
     if not message.text:
         return
+
+    await _auto_sync_if_needed(message)
     await message.chat.do("typing")
     try:
         response = await brain.chat(message.chat.id, message.text)

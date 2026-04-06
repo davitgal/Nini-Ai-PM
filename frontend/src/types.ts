@@ -36,3 +36,21 @@ export interface TaskStats {
   by_priority: Record<string, number>
   overdue: number
 }
+
+export interface WorkspaceInfo {
+  id: string
+  name: string
+  clickup_team_id: string
+  sync_enabled: boolean
+  last_full_sync: string | null
+  webhook_active: boolean
+}
+
+export interface SyncResultResponse {
+  workspace: string
+  created: number
+  updated: number
+  skipped: number
+  archived: number
+  errors: number
+}

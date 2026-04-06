@@ -22,6 +22,7 @@ class SyncResult:
         self.updated = 0
         self.skipped = 0
         self.errors = 0
+        self.archived = 0
 
 
 class SyncEngine:
@@ -37,6 +38,9 @@ class SyncEngine:
         if not token:
             logger.error("No API token for workspace %s", workspace.name)
             return result
+
+        # Track all clickup_task_ids seen during this sync for reconciliation
+        self._seen_clickup_ids: set[str] = set()
 
         client = ClickUpClient(token)
         try:
@@ -106,16 +110,42 @@ class SyncEngine:
                         )
                         await self.db.commit()
 
+            # Reconciliation: archive tasks that exist in DB but not in ClickUp
+            # Scoped strictly to this workspace to avoid touching other workspaces
+            db_tasks = await self.db.execute(
+                select(UnifiedTask).where(
+                    UnifiedTask.workspace_id == workspace.id,
+                    UnifiedTask.user_id == self.user_id,
+                    UnifiedTask.archived.is_(False),
+                    UnifiedTask.clickup_task_id.isnot(None),
+                )
+            )
+            for task in db_tasks.scalars().all():
+                if task.clickup_task_id not in self._seen_clickup_ids:
+                    task.archived = True
+                    task.sync_direction = "inbound"
+                    task.last_synced_at = datetime.now(UTC)
+                    result.archived += 1
+            await self.db.commit()
+
+            if result.archived:
+                logger.info(
+                    "Reconciliation: archived %d tasks no longer in ClickUp for %s",
+                    result.archived,
+                    workspace.name,
+                )
+
             # Update last_full_sync timestamp
             workspace.last_full_sync = datetime.now(UTC)
             await self.db.commit()
 
             logger.info(
-                "Full sync complete for %s: created=%d, updated=%d, skipped=%d, errors=%d",
+                "Full sync complete for %s: created=%d, updated=%d, skipped=%d, archived=%d, errors=%d",
                 workspace.name,
                 result.created,
                 result.updated,
                 result.skipped,
+                result.archived,
                 result.errors,
             )
         finally:
@@ -163,6 +193,10 @@ class SyncEngine:
     async def _upsert_task(self, normalized: dict) -> str:
         """Insert or update a task. Returns 'created', 'updated', or 'skipped'."""
         clickup_task_id = normalized["clickup_task_id"]
+
+        # Track this ID for reconciliation
+        if hasattr(self, "_seen_clickup_ids"):
+            self._seen_clickup_ids.add(clickup_task_id)
 
         # Check if task already exists
         existing = await self.db.execute(

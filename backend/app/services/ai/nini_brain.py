@@ -285,12 +285,16 @@ TOOLS = [
 ]
 
 
+SYNC_COOLDOWN_MINUTES = 30
+
+
 class NiniBrain:
     """Claude-powered AI brain for Nini with tool use."""
 
     def __init__(self):
         self._client: anthropic.AsyncAnthropic | None = None
         self._conversations: dict[int, list[dict]] = {}  # telegram_user_id -> messages
+        self._last_activity: dict[int, datetime] = {}  # chat_id -> last message time
 
     def _get_client(self) -> anthropic.AsyncAnthropic:
         if self._client is None:
@@ -304,6 +308,18 @@ class NiniBrain:
 
     def clear_history(self, chat_id: int) -> None:
         self._conversations.pop(chat_id, None)
+
+    def needs_sync(self, chat_id: int) -> bool:
+        """Check if 30+ minutes passed since last interaction."""
+        last = self._last_activity.get(chat_id)
+        if last is None:
+            return True
+        elapsed = (datetime.now(timezone.utc) - last).total_seconds()
+        return elapsed >= SYNC_COOLDOWN_MINUTES * 60
+
+    def touch_activity(self, chat_id: int) -> None:
+        """Update last activity timestamp."""
+        self._last_activity[chat_id] = datetime.now(timezone.utc)
 
     async def _build_system_prompt(self) -> str:
         """Build system prompt with all memories injected."""

@@ -29,4 +29,5 @@ class SyncResult(BaseModel):
     created: int
     updated: int
     skipped: int
+    archived: int = 0
     errors: int

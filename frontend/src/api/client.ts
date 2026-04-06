@@ -1,9 +1,15 @@
-import type { TaskListResponse, TaskStats } from '../types'
+import type { TaskListResponse, TaskStats, WorkspaceInfo, SyncResultResponse } from '../types'
 
 const BASE = ''
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`)
+  if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`)
+  return res.json()
+}
+
+async function post<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: 'POST' })
   if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`)
   return res.json()
 }
@@ -15,4 +21,16 @@ export function fetchTasks(params: Record<string, string> = {}): Promise<TaskLis
 
 export function fetchStats(): Promise<TaskStats> {
   return get('/api/v1/tasks/stats')
+}
+
+export function fetchWorkspaces(): Promise<WorkspaceInfo[]> {
+  return get('/api/v1/sync/workspaces')
+}
+
+export function syncWorkspace(workspaceId: string): Promise<SyncResultResponse> {
+  return post(`/api/v1/sync/workspace/${workspaceId}`)
+}
+
+export function syncAll(): Promise<SyncResultResponse[]> {
+  return post('/api/v1/sync/full')
 }

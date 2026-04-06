@@ -31,6 +31,29 @@ WEBHOOK_EVENTS = [
 ]
 
 
+@router.get("/workspaces")
+async def list_workspaces(
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
+    """List all workspaces with sync info."""
+    result = await db.execute(
+        select(Workspace).where(Workspace.user_id == user_id)
+    )
+    workspaces = result.scalars().all()
+    return [
+        {
+            "id": str(ws.id),
+            "name": ws.name,
+            "clickup_team_id": ws.clickup_team_id,
+            "sync_enabled": ws.sync_enabled,
+            "last_full_sync": ws.last_full_sync,
+            "webhook_active": ws.webhook_id is not None,
+        }
+        for ws in workspaces
+    ]
+
+
 @router.post("/full", response_model=list[SyncResult])
 async def trigger_full_sync(
     db: AsyncSession = Depends(get_db),
@@ -55,11 +78,42 @@ async def trigger_full_sync(
                 created=sr.created,
                 updated=sr.updated,
                 skipped=sr.skipped,
+                archived=sr.archived,
                 errors=sr.errors,
             )
         )
 
     return results
+
+
+@router.post("/workspace/{workspace_id}", response_model=SyncResult)
+async def sync_single_workspace(
+    workspace_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
+    """Trigger full sync for a single workspace."""
+    result = await db.execute(
+        select(Workspace).where(
+            Workspace.id == workspace_id,
+            Workspace.user_id == user_id,
+        )
+    )
+    workspace = result.scalar_one_or_none()
+    if not workspace:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    engine = SyncEngine(db, user_id)
+    sr = await engine.full_sync(workspace)
+    return SyncResult(
+        workspace=workspace.name,
+        created=sr.created,
+        updated=sr.updated,
+        skipped=sr.skipped,
+        archived=sr.archived,
+        errors=sr.errors,
+    )
 
 
 @router.get("/status", response_model=list[SyncStatusResponse])
