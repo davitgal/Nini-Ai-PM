@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     # Telegram (Phase 2)
     telegram_bot_token: str = ""
+    telegram_owner_id: int = 0
 
     @property
     def is_dev(self) -> bool:

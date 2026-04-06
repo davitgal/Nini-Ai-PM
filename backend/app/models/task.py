@@ -32,6 +32,7 @@ class UnifiedTask(TenantMixin, Base):
         Index("idx_tasks_due", "user_id", "due_date", postgresql_where="due_date IS NOT NULL"),
         Index("idx_tasks_clickup", "clickup_task_id"),
         Index("idx_tasks_updated", "user_id", "date_updated"),
+        Index("idx_tasks_workspace", "workspace_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -39,6 +40,9 @@ class UnifiedTask(TenantMixin, Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id")
     )
     project_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id")

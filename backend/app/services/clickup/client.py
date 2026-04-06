@@ -156,6 +156,9 @@ class ClickUpClient:
         result = await self._request("POST", f"/list/{list_id}/task", json=data)
         return ClickUpTask.model_validate(result)
 
+    async def delete_task(self, task_id: str) -> None:
+        await self._request("DELETE", f"/task/{task_id}")
+
     async def get_custom_fields(self, list_id: str) -> list[dict]:
         data = await self._request("GET", f"/list/{list_id}/field")
         return data.get("fields", [])
