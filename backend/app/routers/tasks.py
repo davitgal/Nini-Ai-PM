@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,9 @@ async def list_tasks(
     company: str | None = None,
     status: str | None = None,
     priority: str | None = None,
+    workspace_id: uuid.UUID | None = None,
+    space_name: str | None = None,
+    list_name: str | None = None,
     due_before: datetime | None = None,
     due_after: datetime | None = None,
     search: str | None = None,
@@ -42,6 +45,12 @@ async def list_tasks(
         query = query.where(UnifiedTask.status == status)
     if priority:
         query = query.where(UnifiedTask.nini_priority == priority)
+    if workspace_id:
+        query = query.where(UnifiedTask.workspace_id == workspace_id)
+    if space_name:
+        query = query.where(UnifiedTask.space_name == space_name)
+    if list_name:
+        query = query.where(UnifiedTask.list_name == list_name)
     if due_before:
         query = query.where(UnifiedTask.due_date <= due_before)
     if due_after:
@@ -153,8 +162,6 @@ async def get_task(
     )
     task = result.scalar_one_or_none()
     if not task:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Task not found")
     return TaskResponse.model_validate(task)
 
@@ -175,8 +182,6 @@ async def update_task(
     )
     task = result.scalar_one_or_none()
     if not task:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Task not found")
 
     update_data = updates.model_dump(exclude_unset=True)

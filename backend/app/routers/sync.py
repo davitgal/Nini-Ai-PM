@@ -3,10 +3,11 @@
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import direct_session_factory
 from app.dependencies import get_current_user_id, get_db
 from app.models.sync_log import SyncLog
 from app.models.task import UnifiedTask
@@ -56,64 +57,101 @@ async def list_workspaces(
 
 @router.post("/full", response_model=list[SyncResult])
 async def trigger_full_sync(
-    db: AsyncSession = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    """Trigger full sync for all enabled workspaces."""
-    result = await db.execute(
-        select(Workspace).where(
-            Workspace.user_id == user_id,
-            Workspace.sync_enabled.is_(True),
-        )
-    )
-    workspaces = result.scalars().all()
+    """Trigger full sync for all enabled workspaces.
 
-    results = []
-    engine = SyncEngine(db, user_id)
-    for ws in workspaces:
-        sr = await engine.full_sync(ws)
-        results.append(
-            SyncResult(
-                workspace=ws.name,
+    Uses direct DB connection (bypasses PgBouncer) for long-running sync.
+    """
+    async with direct_session_factory() as db:
+        try:
+            result = await db.execute(
+                select(Workspace).where(
+                    Workspace.user_id == user_id,
+                    Workspace.sync_enabled.is_(True),
+                )
+            )
+            workspaces = result.scalars().all()
+
+            if not workspaces:
+                return []
+
+            results = []
+            engine = SyncEngine(db, user_id)
+            for ws in workspaces:
+                try:
+                    sr = await engine.full_sync(ws)
+                    results.append(
+                        SyncResult(
+                            workspace=ws.name,
+                            created=sr.created,
+                            updated=sr.updated,
+                            skipped=sr.skipped,
+                            archived=sr.archived,
+                            errors=sr.errors,
+                        )
+                    )
+                except Exception:
+                    logger.exception("Sync failed for workspace %s", ws.name)
+                    results.append(
+                        SyncResult(
+                            workspace=ws.name,
+                            created=0,
+                            updated=0,
+                            skipped=0,
+                            archived=0,
+                            errors=1,
+                        )
+                    )
+
+            return results
+        except Exception as e:
+            logger.exception("Full sync failed: %s", e)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Sync failed: {str(e)}",
+            )
+
+
+@router.post("/workspace/{workspace_id}", response_model=SyncResult)
+async def sync_single_workspace(
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
+    """Trigger full sync for a single workspace.
+
+    Uses direct DB connection (bypasses PgBouncer) for long-running sync.
+    """
+    async with direct_session_factory() as db:
+        try:
+            result = await db.execute(
+                select(Workspace).where(
+                    Workspace.id == workspace_id,
+                    Workspace.user_id == user_id,
+                )
+            )
+            workspace = result.scalar_one_or_none()
+            if not workspace:
+                raise HTTPException(status_code=404, detail="Workspace not found")
+
+            engine = SyncEngine(db, user_id)
+            sr = await engine.full_sync(workspace)
+            return SyncResult(
+                workspace=workspace.name,
                 created=sr.created,
                 updated=sr.updated,
                 skipped=sr.skipped,
                 archived=sr.archived,
                 errors=sr.errors,
             )
-        )
-
-    return results
-
-
-@router.post("/workspace/{workspace_id}", response_model=SyncResult)
-async def sync_single_workspace(
-    workspace_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    user_id: uuid.UUID = Depends(get_current_user_id),
-):
-    """Trigger full sync for a single workspace."""
-    result = await db.execute(
-        select(Workspace).where(
-            Workspace.id == workspace_id,
-            Workspace.user_id == user_id,
-        )
-    )
-    workspace = result.scalar_one_or_none()
-    if not workspace:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Workspace not found")
-
-    engine = SyncEngine(db, user_id)
-    sr = await engine.full_sync(workspace)
-    return SyncResult(
-        workspace=workspace.name,
-        created=sr.created,
-        updated=sr.updated,
-        skipped=sr.skipped,
-        archived=sr.archived,
-        errors=sr.errors,
-    )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Sync failed for workspace %s: %s", workspace_id, e)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Sync failed: {str(e)}",
+            )
 
 
 @router.get("/status", response_model=list[SyncStatusResponse])
@@ -130,7 +168,10 @@ async def sync_status(
     statuses = []
     for ws in workspaces:
         task_count = await db.execute(
-            select(func.count(UnifiedTask.id)).where(UnifiedTask.user_id == user_id)
+            select(func.count(UnifiedTask.id)).where(
+                UnifiedTask.user_id == user_id,
+                UnifiedTask.workspace_id == ws.id,
+            )
         )
         statuses.append(
             SyncStatusResponse(

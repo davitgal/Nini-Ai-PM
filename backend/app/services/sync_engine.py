@@ -45,10 +45,11 @@ class SyncEngine:
         client = ClickUpClient(token)
         try:
             team_id = workspace.clickup_team_id
-            logger.info("Starting full sync for workspace %s (team_id=%s)", workspace.name, team_id)
-
-            # Disable statement timeout for long-running sync operations
-            await self.db.execute(text("SET statement_timeout = 0"))
+            logger.info(
+                "Starting full sync for workspace %s (team_id=%s)",
+                workspace.name,
+                team_id,
+            )
 
             spaces = await client.get_spaces(team_id)
             for space in spaces:
@@ -67,7 +68,6 @@ class SyncEngine:
                 # Folderless lists in the space
                 folderless_lists = await client.get_folderless_lists(space.id)
                 for lst in folderless_lists:
-                    await self.db.execute(text("SET statement_timeout = 0"))
                     list_project_id = await self._upsert_project(
                         workspace_id=workspace.id,
                         clickup_id=lst.id,
@@ -76,27 +76,35 @@ class SyncEngine:
                         parent_id=space_project_id,
                         company_tag=None,
                     )
-                    await self._sync_list_tasks(client, lst.id, list_project_id, None, result)
+                    await self._sync_list_tasks(
+                        client=client,
+                        list_id=lst.id,
+                        project_id=list_project_id,
+                        folder_name=None,
+                        result=result,
+                        workspace_id=workspace.id,
+                        workspace_name=workspace.name,
+                        space_name=space.name,
+                        list_name=lst.name,
+                    )
                     await self.db.commit()
 
                 # Folders in the space
                 folders = await client.get_folders(space.id)
                 for folder in folders:
-                    await self.db.execute(text("SET statement_timeout = 0"))
                     folder_project_id = await self._upsert_project(
                         workspace_id=workspace.id,
                         clickup_id=folder.id,
                         clickup_type="folder",
                         name=folder.name,
                         parent_id=space_project_id,
-                        company_tag=folder.name,  # folder name as potential company tag
+                        company_tag=folder.name,
                     )
                     await self.db.commit()
                     logger.info("Synced folder: %s", folder.name)
 
                     lists = await client.get_lists(folder.id)
                     for lst in lists:
-                        await self.db.execute(text("SET statement_timeout = 0"))
                         list_project_id = await self._upsert_project(
                             workspace_id=workspace.id,
                             clickup_id=lst.id,
@@ -106,12 +114,19 @@ class SyncEngine:
                             company_tag=folder.name,
                         )
                         await self._sync_list_tasks(
-                            client, lst.id, list_project_id, folder.name, result
+                            client=client,
+                            list_id=lst.id,
+                            project_id=list_project_id,
+                            folder_name=folder.name,
+                            result=result,
+                            workspace_id=workspace.id,
+                            workspace_name=workspace.name,
+                            space_name=space.name,
+                            list_name=lst.name,
                         )
                         await self.db.commit()
 
             # Reconciliation: archive tasks that exist in DB but not in ClickUp
-            # Scoped strictly to this workspace to avoid touching other workspaces
             db_tasks = await self.db.execute(
                 select(UnifiedTask).where(
                     UnifiedTask.workspace_id == workspace.id,
@@ -154,7 +169,10 @@ class SyncEngine:
         return result
 
     async def sync_single_task(
-        self, client: ClickUpClient, clickup_task_id: str, folder_name: str | None = None
+        self,
+        client: ClickUpClient,
+        clickup_task_id: str,
+        folder_name: str | None = None,
     ) -> str:
         """Sync a single task from ClickUp. Returns 'created', 'updated', or 'skipped'."""
         task = await client.get_task(clickup_task_id)
@@ -168,14 +186,25 @@ class SyncEngine:
         project_id: uuid.UUID,
         folder_name: str | None,
         result: SyncResult,
+        workspace_id: uuid.UUID,
+        workspace_name: str,
+        space_name: str,
+        list_name: str,
     ) -> None:
         """Sync all tasks in a ClickUp list."""
         try:
             tasks = await client.get_all_tasks(list_id, include_closed=True)
             for task in tasks:
                 try:
-                    normalized = normalize_task(task, folder_name=folder_name)
+                    normalized = normalize_task(
+                        task,
+                        folder_name=folder_name,
+                        space_name=space_name,
+                        list_name=list_name,
+                    )
                     normalized["project_id"] = project_id
+                    normalized["workspace_id"] = workspace_id
+                    normalized["workspace_name"] = workspace_name
                     action = await self._upsert_task(normalized)
                     if action == "created":
                         result.created += 1
@@ -207,6 +236,15 @@ class SyncEngine:
         if existing_task:
             # Check sync_hash — skip if unchanged
             if existing_task.sync_hash == normalized.get("sync_hash"):
+                # Still update denormalized names if they changed
+                changed = False
+                for field in ("workspace_name", "space_name", "list_name", "workspace_id"):
+                    new_val = normalized.get(field)
+                    if new_val is not None and getattr(existing_task, field, None) != new_val:
+                        setattr(existing_task, field, new_val)
+                        changed = True
+                if changed:
+                    await self.db.flush()
                 return "skipped"
 
             # Update existing task

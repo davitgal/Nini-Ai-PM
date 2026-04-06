@@ -36,7 +36,29 @@ export default function Overview() {
   })
 
   if (statsLoading) {
-    return <div className="text-gray-500 py-8">Загрузка...</div>
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '80px 20px',
+        color: '#6b6b85',
+        fontSize: '14px',
+      }}>
+        <span style={{
+          display: 'inline-block',
+          width: '16px',
+          height: '16px',
+          border: '2px solid #2a2a3d',
+          borderTopColor: '#8b5cf6',
+          borderRadius: '50%',
+          animation: 'spin 0.8s linear infinite',
+          marginRight: '10px',
+        }} />
+        Загрузка...
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
   }
 
   const overdueFiltered = overdueTasks?.tasks.filter(
@@ -45,56 +67,202 @@ export default function Overview() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-6">Overview</h1>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard title="Всего задач" value={stats?.total ?? 0} color="purple" />
-        <StatCard title="Просрочено" value={stats?.overdue ?? 0} color={stats?.overdue ? 'red' : 'green'} />
-        <StatCard title="На этой неделе" value={weekTasks?.total ?? 0} />
-        <StatCard title="Компании" value={Object.keys(stats?.by_company ?? {}).length} />
+      {/* Header */}
+      <div style={{ marginBottom: '28px' }}>
+        <h1 style={{
+          fontSize: '24px',
+          fontWeight: 700,
+          margin: 0,
+          letterSpacing: '-0.02em',
+          color: '#e8e8f0',
+        }}>
+          Dashboard
+        </h1>
+        <p style={{
+          fontSize: '13px',
+          color: '#6b6b85',
+          margin: '4px 0 0',
+        }}>
+          Nini AI Project Manager — overview всех задач
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+      {/* Stats grid */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: '14px',
+        marginBottom: '32px',
+      }}>
+        <StatCard title="Всего задач" value={stats?.total ?? 0} color="purple" icon="📋" />
+        <StatCard
+          title="Просрочено"
+          value={stats?.overdue ?? 0}
+          color={stats?.overdue ? 'red' : 'green'}
+          icon={stats?.overdue ? '🔴' : '✅'}
+        />
+        <StatCard title="На этой неделе" value={weekTasks?.total ?? 0} color="blue" icon="📅" />
+        <StatCard
+          title="Компании"
+          value={Object.keys(stats?.by_company ?? {}).length}
+          color="default"
+          icon="🏢"
+        />
+      </div>
+
+      {/* Two-column breakdown */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+        gap: '20px',
+        marginBottom: '32px',
+      }}>
+        {/* By company */}
         <div>
-          <h2 className="text-lg font-semibold mb-3 text-gray-300">По компаниям</h2>
-          <div className="space-y-2">
+          <h2 style={{
+            fontSize: '14px',
+            fontWeight: 600,
+            color: '#9898b0',
+            margin: '0 0 12px',
+            letterSpacing: '0.01em',
+          }}>
+            По компаниям
+          </h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {Object.entries(stats?.by_company ?? {})
               .sort(([, a], [, b]) => b - a)
               .map(([company, count]) => (
-                <div key={company} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-900 border border-gray-800">
-                  <span className="text-sm">{company}</span>
-                  <span className="text-sm font-medium text-purple-400">{count}</span>
+                <div
+                  key={company}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '8px 14px',
+                    borderRadius: '8px',
+                    background: 'rgba(18, 18, 26, 0.6)',
+                    border: '1px solid #1e1e30',
+                    transition: 'background 0.1s',
+                    cursor: 'default',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(26, 26, 40, 0.8)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(18, 18, 26, 0.6)')}
+                >
+                  <span style={{ fontSize: '13px', color: '#c8c8d8' }}>{company}</span>
+                  <span style={{
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    color: '#a78bfa',
+                    minWidth: '28px',
+                    textAlign: 'right',
+                  }}>
+                    {count}
+                  </span>
                 </div>
               ))}
           </div>
         </div>
 
+        {/* By status */}
         <div>
-          <h2 className="text-lg font-semibold mb-3 text-gray-300">По статусам</h2>
-          <div className="space-y-2">
+          <h2 style={{
+            fontSize: '14px',
+            fontWeight: 600,
+            color: '#9898b0',
+            margin: '0 0 12px',
+            letterSpacing: '0.01em',
+          }}>
+            По статусам
+          </h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {Object.entries(stats?.by_status ?? {})
               .sort(([, a], [, b]) => b - a)
               .map(([status, count]) => (
-                <div key={status} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-900 border border-gray-800">
-                  <span className="text-sm">{status}</span>
-                  <span className="text-sm font-medium text-gray-300">{count}</span>
+                <div
+                  key={status}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '8px 14px',
+                    borderRadius: '8px',
+                    background: 'rgba(18, 18, 26, 0.6)',
+                    border: '1px solid #1e1e30',
+                    transition: 'background 0.1s',
+                    cursor: 'default',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(26, 26, 40, 0.8)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(18, 18, 26, 0.6)')}
+                >
+                  <span style={{ fontSize: '13px', color: '#c8c8d8' }}>{status}</span>
+                  <span style={{
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    color: '#9898b0',
+                    minWidth: '28px',
+                    textAlign: 'right',
+                  }}>
+                    {count}
+                  </span>
                 </div>
               ))}
           </div>
         </div>
       </div>
 
+      {/* Overdue tasks */}
       {overdueFiltered.length > 0 && (
-        <div className="mb-8">
-          <h2 className="text-lg font-semibold mb-3 text-red-400">Просроченные задачи</h2>
-          <TaskTable tasks={overdueFiltered} />
+        <div style={{ marginBottom: '32px' }}>
+          <h2 style={{
+            fontSize: '14px',
+            fontWeight: 600,
+            color: '#f87171',
+            margin: '0 0 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}>
+            <span>🔴</span> Просроченные задачи
+            <span style={{
+              fontSize: '11px',
+              fontWeight: 500,
+              padding: '2px 8px',
+              borderRadius: '10px',
+              background: 'rgba(239, 68, 68, 0.12)',
+              color: '#f87171',
+            }}>
+              {overdueFiltered.length}
+            </span>
+          </h2>
+          <TaskTable tasks={overdueFiltered} compact />
         </div>
       )}
 
+      {/* This week */}
       {(weekTasks?.tasks.length ?? 0) > 0 && (
         <div>
-          <h2 className="text-lg font-semibold mb-3 text-gray-300">На этой неделе</h2>
-          <TaskTable tasks={weekTasks!.tasks} />
+          <h2 style={{
+            fontSize: '14px',
+            fontWeight: 600,
+            color: '#9898b0',
+            margin: '0 0 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}>
+            <span>📅</span> На этой неделе
+            <span style={{
+              fontSize: '11px',
+              fontWeight: 500,
+              padding: '2px 8px',
+              borderRadius: '10px',
+              background: 'rgba(59, 130, 246, 0.12)',
+              color: '#60a5fa',
+            }}>
+              {weekTasks!.tasks.length}
+            </span>
+          </h2>
+          <TaskTable tasks={weekTasks!.tasks} compact />
         </div>
       )}
     </div>

@@ -70,6 +70,11 @@ class UnifiedTask(TenantMixin, Base):
     company_tag: Mapped[str | None] = mapped_column(String)
     task_type_tag: Mapped[str | None] = mapped_column(String)
 
+    # Denormalized hierarchy names for fast display
+    workspace_name: Mapped[str | None] = mapped_column(String)
+    space_name: Mapped[str | None] = mapped_column(String)
+    list_name: Mapped[str | None] = mapped_column(String)
+
     # People
     assignees: Mapped[list] = mapped_column(JSONB, server_default="[]")
     creator_id: Mapped[int | None] = mapped_column(BigInteger)

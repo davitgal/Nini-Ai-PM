@@ -79,6 +79,8 @@ def compute_sync_hash(normalized: dict) -> str:
 def normalize_task(
     task: ClickUpTask,
     folder_name: str | None = None,
+    space_name: str | None = None,
+    list_name: str | None = None,
 ) -> dict:
     """Convert a ClickUp task to a flat dict matching unified_tasks columns."""
     assignees = [
@@ -102,6 +104,10 @@ def normalize_task(
 
     tags = [t.name for t in task.tags]
 
+    # Resolve space/list names from task data if not provided
+    resolved_list_name = list_name or (task.list.name if task.list and task.list.name else None)
+    resolved_space_name = space_name
+
     normalized = {
         # ClickUp identity
         "clickup_task_id": task.id,
@@ -119,6 +125,9 @@ def normalize_task(
         # Context
         "company_tag": company_tag,
         "task_type_tag": task_type_tag,
+        # Hierarchy names (denormalized)
+        "space_name": resolved_space_name,
+        "list_name": resolved_list_name,
         # People
         "assignees": assignees,
         "creator_id": task.creator.id if task.creator else None,
@@ -140,3 +149,4 @@ def normalize_task(
 
     normalized["sync_hash"] = compute_sync_hash(normalized)
     return normalized
+

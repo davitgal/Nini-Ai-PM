@@ -9,6 +9,10 @@ export interface Task {
   nini_priority: string
   company_tag: string | null
   task_type_tag: string | null
+  workspace_id: string | null
+  workspace_name: string | null
+  space_name: string | null
+  list_name: string | null
   assignees: { id?: number; username?: string }[]
   due_date: string | null
   start_date: string | null

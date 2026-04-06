@@ -5,7 +5,7 @@ import logging
 
 from sqlalchemy import select
 
-from app.database import async_session_factory
+from app.database import direct_session_factory
 from app.dependencies import DAVIT_USER_ID
 from app.models.workspace import Workspace
 from app.services.sync_engine import SyncEngine
@@ -21,7 +21,7 @@ async def periodic_full_sync() -> None:
         await asyncio.sleep(SYNC_INTERVAL_HOURS * 3600)
         logger.info("Starting scheduled full sync")
         try:
-            async with async_session_factory() as db:
+            async with direct_session_factory() as db:
                 result = await db.execute(
                     select(Workspace).where(
                         Workspace.user_id == DAVIT_USER_ID,

@@ -17,6 +17,10 @@ class TaskResponse(BaseModel):
     nini_priority: str
     company_tag: str | None
     task_type_tag: str | None
+    workspace_id: uuid.UUID | None = None
+    workspace_name: str | None = None
+    space_name: str | None = None
+    list_name: str | None = None
     assignees: list[dict]
     due_date: datetime | None
     start_date: datetime | None
