@@ -4,9 +4,19 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import settings
 
+
+def _ensure_async_url(url: str) -> str:
+    """Convert postgresql:// to postgresql+asyncpg:// if needed."""
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return url
+
+
 # Pooled connection (port 6543) for API requests — fast, PgBouncer managed
 engine = create_async_engine(
-    settings.database_url,
+    _ensure_async_url(settings.database_url),
     echo=settings.is_dev,
     pool_size=5,
     max_overflow=10,
@@ -17,7 +27,7 @@ engine = create_async_engine(
 # Direct connection (port 5432) for long-running operations like sync and migrations
 _direct_url = settings.direct_database_url or settings.database_url
 direct_engine = create_async_engine(
-    _direct_url,
+    _ensure_async_url(_direct_url),
     echo=settings.is_dev,
     pool_size=2,
     max_overflow=3,
