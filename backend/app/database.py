@@ -6,12 +6,21 @@ from app.config import settings
 
 
 def _ensure_async_url(url: str) -> str:
-    """Convert postgresql:// to postgresql+asyncpg:// if needed."""
+    """Convert postgresql:// to postgresql+asyncpg:// and strip Supabase-specific params."""
     if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    if url.startswith("postgres://"):
-        return url.replace("postgres://", "postgresql+asyncpg://", 1)
-    return url
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+    # Strip params that asyncpg doesn't understand (Supabase adds ?pgbouncer=true)
+    from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    # Remove non-asyncpg params
+    for key in ("pgbouncer", "sslmode", "supa"):
+        params.pop(key, None)
+    clean_query = urlencode(params, doseq=True)
+    return urlunparse(parsed._replace(query=clean_query))
 
 
 # Pooled connection (port 6543) for API requests — fast, PgBouncer managed
