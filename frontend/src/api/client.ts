@@ -33,8 +33,11 @@ export function fetchWorkspaces(): Promise<WorkspaceInfo[]> {
   return get('/api/v1/sync/workspaces')
 }
 
+// Temporarily restricted to one list during development
+const DEV_SYNC_LIST_ID = '901410057231'
+
 export function syncWorkspace(workspaceId: string): Promise<SyncResultResponse> {
-  return post(`/api/v1/sync/workspace/${workspaceId}`)
+  return post(`/api/v1/sync/workspace/${workspaceId}?list_id=${DEV_SYNC_LIST_ID}`)
 }
 
 export function syncAll(): Promise<SyncResultResponse[]> {

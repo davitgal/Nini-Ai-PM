@@ -116,10 +116,12 @@ async def trigger_full_sync(
 @router.post("/workspace/{workspace_id}", response_model=SyncResult)
 async def sync_single_workspace(
     workspace_id: uuid.UUID,
+    list_id: str | None = None,
     user_id: uuid.UUID = Depends(get_current_user_id),
 ):
     """Trigger full sync for a single workspace.
 
+    Pass ?list_id=XXX to sync only one specific list.
     Uses direct DB connection (bypasses PgBouncer) for long-running sync.
     """
     async with direct_session_factory() as db:
@@ -135,7 +137,7 @@ async def sync_single_workspace(
                 raise HTTPException(status_code=404, detail="Workspace not found")
 
             engine = SyncEngine(db, user_id)
-            sr = await engine.full_sync(workspace)
+            sr = await engine.full_sync(workspace, only_list_id=list_id)
             return SyncResult(
                 workspace=workspace.name,
                 created=sr.created,

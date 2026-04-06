@@ -30,8 +30,11 @@ class SyncEngine:
         self.db = db
         self.user_id = user_id
 
-    async def full_sync(self, workspace: Workspace) -> SyncResult:
-        """Walk entire workspace hierarchy, sync all tasks."""
+    async def full_sync(self, workspace: Workspace, only_list_id: str | None = None) -> SyncResult:
+        """Walk entire workspace hierarchy, sync all tasks.
+
+        If only_list_id is provided, only that list is synced (for testing/debugging).
+        """
         result = SyncResult()
 
         token = workspace.clickup_api_token
@@ -46,9 +49,10 @@ class SyncEngine:
         try:
             team_id = workspace.clickup_team_id
             logger.info(
-                "Starting full sync for workspace %s (team_id=%s)",
+                "Starting full sync for workspace %s (team_id=%s, only_list_id=%s)",
                 workspace.name,
                 team_id,
+                only_list_id or "all",
             )
 
             spaces = await client.get_spaces(team_id)
@@ -68,6 +72,8 @@ class SyncEngine:
                 # Folderless lists in the space
                 folderless_lists = await client.get_folderless_lists(space.id)
                 for lst in folderless_lists:
+                    if only_list_id and lst.id != only_list_id:
+                        continue
                     list_project_id = await self._upsert_project(
                         workspace_id=workspace.id,
                         clickup_id=lst.id,
@@ -105,6 +111,8 @@ class SyncEngine:
 
                     lists = await client.get_lists(folder.id)
                     for lst in lists:
+                        if only_list_id and lst.id != only_list_id:
+                            continue
                         list_project_id = await self._upsert_project(
                             workspace_id=workspace.id,
                             clickup_id=lst.id,
@@ -127,13 +135,17 @@ class SyncEngine:
                         await self.db.commit()
 
             # Reconciliation: archive tasks that exist in DB but not in ClickUp
+            # When syncing a single list, only reconcile tasks from that list
+            reconcile_filter = [
+                UnifiedTask.workspace_id == workspace.id,
+                UnifiedTask.user_id == self.user_id,
+                UnifiedTask.archived.is_(False),
+                UnifiedTask.clickup_task_id.isnot(None),
+            ]
+            if only_list_id:
+                reconcile_filter.append(UnifiedTask.clickup_list_id == only_list_id)
             db_tasks = await self.db.execute(
-                select(UnifiedTask).where(
-                    UnifiedTask.workspace_id == workspace.id,
-                    UnifiedTask.user_id == self.user_id,
-                    UnifiedTask.archived.is_(False),
-                    UnifiedTask.clickup_task_id.isnot(None),
-                )
+                select(UnifiedTask).where(*reconcile_filter)
             )
             for task in db_tasks.scalars().all():
                 if task.clickup_task_id not in self._seen_clickup_ids:
@@ -232,6 +244,11 @@ class SyncEngine:
             select(UnifiedTask).where(UnifiedTask.clickup_task_id == clickup_task_id)
         )
         existing_task = existing.scalar_one_or_none()
+
+        # Skip closed tasks that don't exist in DB yet — no point importing them
+        # But if they already exist, still sync so status changes are captured
+        if existing_task is None and normalized.get("status_type") == "closed":
+            return "skipped"
 
         if existing_task:
             # Check sync_hash — skip if unchanged

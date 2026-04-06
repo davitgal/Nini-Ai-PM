@@ -16,11 +16,15 @@
 - [x] Background sync scheduler (every 6 hours)
 - [x] Unit tests (7 normalizer tests passing)
 - [x] First full sync: 1,049 tasks from TrueCodeLab synced to Supabase
+- [x] DB reset + clean re-sync with new logic
+- [x] Skip closed tasks on insert (status_type=closed → не создаём, но обновляем если есть)
+- [x] Single-list sync mode: только "Доска задач" (list_id: 901410057231) в scheduler и UI
+- [x] Reconciliation fix: при single-list sync архивируем только задачи этого листа
 
 ### Remaining
+- [ ] Расширить sync на все листы (убрать DEV_SYNC_LIST_ID когда будет готово)
 - [ ] Connect Yerevan Mall workspace (need team_id + API token)
 - [ ] Connect CubicSoft workspace (need team_id + API token)
-- [ ] Deploy backend to Railway
 - [ ] Register ClickUp webhooks for real-time sync
 - [ ] Git init + initial commit
 

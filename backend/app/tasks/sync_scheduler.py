@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 SYNC_INTERVAL_HOURS = 6
 
+# Temporary: only sync this list until full workspace sync is ready
+DEV_SYNC_LIST_ID = "901410057231"
+
 
 async def periodic_full_sync() -> None:
     """Run full sync for all enabled workspaces on a schedule."""
@@ -33,7 +36,7 @@ async def periodic_full_sync() -> None:
                 engine = SyncEngine(db, DAVIT_USER_ID)
                 for ws in workspaces:
                     try:
-                        sr = await engine.full_sync(ws)
+                        sr = await engine.full_sync(ws, only_list_id=DEV_SYNC_LIST_ID)
                         logger.info(
                             "Scheduled sync %s: created=%d updated=%d skipped=%d errors=%d",
                             ws.name,

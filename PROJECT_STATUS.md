@@ -30,8 +30,8 @@
 |-------|---------|-------------|
 | `users` | 1 | Davit's profile |
 | `workspaces` | 1 | TrueCodeLab (team_id: 9014579452) |
-| `projects` | 56 | Spaces (3), Folders (14), Lists (39) |
-| `unified_tasks` | 1,049 | All tasks from TrueCodeLab workspace |
+| `projects` | — | Spaces/Folders/Lists (repopulated after reset) |
+| `unified_tasks` | ~11 | Only "Доска задач" list (list_id: 901410057231) |
 | `sync_log` | — | Webhook event audit trail |
 | `knowledge_base` | — | RAG storage (Phase 2) |
 
@@ -41,7 +41,7 @@
 
 | Workspace | Status | Team ID | Token |
 |-----------|--------|---------|-------|
-| TrueCodeLab | Synced (1,049 tasks) | 9014579452 | Configured |
+| TrueCodeLab | Synced (1 list: "Доска задач") | 9014579452 | Configured |
 | Yerevan Mall | Not connected | — | Needs token |
 | CubicSoft | Not connected | — | Needs token |
 
@@ -84,6 +84,8 @@
 4. **Dual DB connections** — PgBouncer (port 6543) для API, Direct (port 5432) для sync/migrations
 5. **user_id everywhere** — готовность к multi-tenancy
 6. **Commit per list** — sync коммитит после каждого списка, чтобы избежать statement_timeout
+7. **Skip closed tasks on insert** — задачи с `status_type=closed` не создаются в БД, но обновляются если уже есть
+8. **Single-list sync mode** — временно синкается только список `901410057231` ("Доска задач") через `DEV_SYNC_LIST_ID` в scheduler и frontend
 
 ---
 
