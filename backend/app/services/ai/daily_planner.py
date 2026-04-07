@@ -56,7 +56,7 @@ async def _fetch_active_tasks(db: AsyncSession) -> list[UnifiedTask]:
 
 
 async def _call_claude(system: str, user_message: str) -> str:
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key or None)
     response = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1024,

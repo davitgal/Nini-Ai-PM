@@ -298,9 +298,8 @@ class NiniBrain:
 
     def _get_client(self) -> anthropic.AsyncAnthropic:
         if self._client is None:
-            if not settings.anthropic_api_key:
-                raise RuntimeError("ANTHROPIC_API_KEY не задан — проверь переменные окружения на Railway")
-            self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            # Pass None if empty so SDK auto-reads ANTHROPIC_API_KEY from env directly
+            self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key or None)
         return self._client
 
     def _get_history(self, chat_id: int) -> list[dict]:
