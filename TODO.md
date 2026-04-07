@@ -1,89 +1,71 @@
 # Nini AI Agent — TODO
 
-## Phase 1: Backend Core + ClickUp Sync
+## Phase 1: Backend Core + ClickUp Sync ✅
 
-### Done
 - [x] Project scaffolding (monorepo, pyproject.toml, Makefile, Docker)
 - [x] Config + DB setup (pydantic-settings, async SQLAlchemy, Alembic)
 - [x] FastAPI skeleton (app factory, health, CORS, error handling, DI)
-- [x] Database schema (6 tables: users, workspaces, projects, unified_tasks, sync_log, knowledge_base)
+- [x] Database schema (users, workspaces, projects, unified_tasks, sync_log, knowledge_base)
 - [x] ClickUp REST client (async httpx, rate limiter 100 req/min, retry on 429/5xx)
-- [x] Task normalizer (ClickUp JSON -> unified_tasks, company_tag resolution, sync_hash)
-- [x] Full sync engine (spaces -> folders -> lists -> tasks, commit per list)
+- [x] Task normalizer (ClickUp JSON → unified_tasks, company_tag resolution, sync_hash)
+- [x] Full sync engine (spaces → folders → lists → tasks, commit per list)
 - [x] Webhook receiver (signature verification, idempotency, event routing)
 - [x] Outbound sync (push to ClickUp, conflict detection via date_updated)
 - [x] REST API endpoints (14 endpoints: tasks CRUD, projects, sync, stats)
 - [x] Background sync scheduler (every 6 hours)
 - [x] Unit tests (7 normalizer tests passing)
-- [x] First full sync: 1,049 tasks from TrueCodeLab synced to Supabase
-- [x] DB reset + clean re-sync with new logic
-- [x] Skip closed tasks on insert (status_type=closed → не создаём, но обновляем если есть)
-- [x] Single-list sync mode: только "Доска задач" (list_id: 901410057231) в scheduler и UI
-- [x] Reconciliation fix: при single-list sync архивируем только задачи этого листа
-
-### Remaining
-- [ ] Расширить sync на все листы (убрать DEV_SYNC_LIST_ID когда будет готово)
-- [ ] Connect Yerevan Mall workspace (need team_id + API token)
-- [ ] Connect CubicSoft workspace (need team_id + API token)
-- [ ] Register ClickUp webhooks for real-time sync
-- [ ] Git init + initial commit
+- [x] Skip closed tasks on insert
+- [x] Single-list sync mode: только "Доска задач" (list_id: 901410057231)
+- [x] Reconciliation fix: архивируем только задачи синкнутого листа
 
 ---
 
-## Phase 2: Telegram Bot + Claude AI  <-- NEXT
+## Phase 2: Telegram Bot + Claude AI ✅
 
-### Telegram Bot
-- [ ] Create Telegram bot via @BotFather
-- [ ] Set up bot framework (aiogram or python-telegram-bot)
-- [ ] Basic command handlers (/start, /help, /tasks, /status)
-- [ ] Connect bot to FastAPI backend
-- [ ] Message routing: user message -> Nini AI -> response
-
-### Claude AI Integration
-- [ ] Anthropic API client setup
-- [ ] System prompt: Nini's personality (Armenian PM assistant, strict but caring)
-- [ ] Tool definitions for Claude (get_tasks, create_task, update_task, get_stats)
-- [ ] Priority engine: Money > Stakeholders > Deadlines
-- [ ] Context building: inject relevant tasks into conversation
-- [ ] Natural language task creation ("create a task for Yerevan Mall...")
-- [ ] Daily/weekly summary generation
-
-### Conversation Features
-- [ ] Ask about tasks ("what's overdue?", "what should I focus on?")
-- [ ] Create tasks via natural language
-- [ ] Update task status through chat
-- [ ] Get priority recommendations
-- [ ] Morning briefing (auto-send daily summary)
+- [x] Telegram bot (aiogram 3, long polling, OwnerOnly middleware)
+- [x] Commands: /start, /help, /tasks, /overdue, /stats, /briefing, /clear
+- [x] Free-text → NiniBrain.chat() → Claude response
+- [x] Claude tool use: get_tasks, get_stats, get_overdue_tasks, create_task, update_task, save_memory, delete_memory
+- [x] Nini personality: 26-летняя дерзкая PM, говорит по-русски, Telegram HTML formatting
+- [x] Auto-sync on user interaction (30-min window)
+- [x] Persistent memory via knowledge_base table
 
 ---
 
-## Phase 3: Smart Features
+## Phase 3: Proactive AI ✅
 
-- [ ] AI priority scoring (nini_priority based on task context)
-- [ ] "Great Cleanup" — interactive onboarding to review all tasks
-- [ ] Deadline risk detection (flag tasks likely to miss deadlines)
-- [ ] Workload analysis across companies
-- [ ] Knowledge base (RAG) for project context
-- [ ] Smart notifications (Telegram alerts for important changes)
+- [x] DailyPlanner: morning plan, midday replan, EOD review через Claude
+- [x] DailyPlan модель (must_do / should_do / can_wait / blocked / completed / risks)
+- [x] DailyState модель: статус ритуалов на каждый день (pending/done/skipped)
+- [x] DailyContext модель: краткосрочная память — активность пользователя, история взаимодействий, риски
+- [x] Supervisor: проактивный decision layer (каждые 5 мин, recovery при downtime)
+- [x] AdaptiveMessenger: выбор тона (assertive/neutral/casual/soft), ротация recovery-префиксов
+- [x] Activity tracking: каждое сообщение пользователя → DailyContext
 
 ---
 
-## Phase 4: Frontend Dashboard
+## В работе / Backlog
 
-- [ ] React app (Telegram Mini App)
+### ClickUp
+- [ ] Расширить sync на все листы (убрать DEV_SYNC_LIST_ID)
+- [ ] Connect Yerevan Mall workspace
+- [ ] Connect CubicSoft workspace
+- [ ] Register ClickUp webhooks для real-time sync
+
+### Proactive AI — следующие шаги
+- [ ] Напоминания внутри дня (если есть критические задачи и пользователь неактивен)
+- [ ] Контекст из DailyContext в промпты NiniBrain (Нини знает что уже обсуждалось сегодня)
+- [ ] Анализ паттернов: "ты обычно продуктивен по утрам, сейчас уже 14:00"
+
+### Phase 4: Frontend Dashboard
+- [ ] React Telegram Mini App
 - [ ] Task board view (kanban by company/priority)
 - [ ] Calendar view (deadlines, milestones)
-- [ ] Analytics dashboard (company stats, velocity)
+- [ ] Analytics dashboard
 - [ ] Deploy to Vercel
 
----
-
-## Backlog
-
-- [ ] Multi-workspace sync (run parallel syncs)
-- [ ] Conflict resolution UI
-- [ ] Task dependencies visualization
-- [ ] Time tracking integration
-- [ ] Custom notification rules
+### Backlog
+- [ ] AI priority scoring (nini_priority на основе контекста задачи)
+- [ ] "Большая уборка" — онбординг для ревью всех задач
+- [ ] Workload analysis по компаниям
 - [ ] Webhook health monitoring
-- [ ] API rate limit dashboard

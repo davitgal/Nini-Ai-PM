@@ -2,7 +2,7 @@
 
 ## Overview
 
-**Nini** — персональный AI проект-менеджер для Давита. Агрегирует задачи из нескольких ClickUp воркспейсов в единую систему с приоритизацией (Money > Stakeholders > Deadlines). Telegram-бот с интеллектом Claude для управления задачами через естественный язык.
+**Nini** — персональный AI проект-менеджер для Давита. Агрегирует задачи из нескольких ClickUp воркспейсов, приоритизирует по схеме Money > Stakeholders > Deadlines. Telegram-бот с интеллектом Claude — проактивный ассистент с ежедневными ритуалами (утренний план, перепланирование, итог дня) и краткосрочной памятью.
 
 **Архитектура:** Monorepo (`backend/` + `frontend/`), single-user сейчас, multi-tenant ready.
 
@@ -16,34 +16,37 @@
 | Database | Supabase Cloud (PostgreSQL 17.6, Seoul region) |
 | Migrations | Alembic |
 | ClickUp API | httpx async, rate limiter (100 req/min) |
-| AI (Phase 2) | Anthropic Claude API |
-| Bot (Phase 2) | python-telegram-bot / aiogram |
-| Frontend (Phase 4) | React (Telegram Mini App) |
+| AI | Anthropic Claude API (claude-sonnet-4-20250514) |
+| Bot | aiogram 3, long polling |
+| Frontend | React (Telegram Mini App), Vite, TailwindCSS |
 | Package Manager | uv |
 | Deploy | Railway (backend), Vercel (frontend) |
 
 ---
 
-## Database Schema (6 tables)
+## Database Schema (9 tables)
 
-| Table | Records | Description |
-|-------|---------|-------------|
-| `users` | 1 | Davit's profile |
-| `workspaces` | 1 | TrueCodeLab (team_id: 9014579452) |
-| `projects` | — | Spaces/Folders/Lists (repopulated after reset) |
-| `unified_tasks` | ~11 | Only "Доска задач" list (list_id: 901410057231) |
-| `sync_log` | — | Webhook event audit trail |
-| `knowledge_base` | — | RAG storage (Phase 2) |
+| Table | Description |
+|-------|-------------|
+| `users` | Профиль Давита |
+| `workspaces` | ClickUp команды (TrueCodeLab, etc.) |
+| `projects` | Spaces / Folders / Lists иерархия |
+| `unified_tasks` | Агрегированные задачи из ClickUp |
+| `sync_log` | Аудит webhook-событий |
+| `knowledge_base` | Persistent память Нини (RAG, Phase 3) |
+| `daily_plans` | Утренние планы, перепланирования, итоги дня |
+| `daily_states` | Статус ритуалов на каждый день (pending/done/skipped) |
+| `daily_contexts` | Краткосрочная память: активность пользователя, история взаимодействий, риски |
 
 ---
 
 ## ClickUp Workspaces
 
-| Workspace | Status | Team ID | Token |
-|-----------|--------|---------|-------|
-| TrueCodeLab | Synced (1 list: "Доска задач") | 9014579452 | Configured |
-| Yerevan Mall | Not connected | — | Needs token |
-| CubicSoft | Not connected | — | Needs token |
+| Workspace | Status | Team ID |
+|-----------|--------|---------|
+| TrueCodeLab | Synced (1 list: "Доска задач") | 9014579452 |
+| Yerevan Mall | Not connected | — |
+| CubicSoft | Not connected | — |
 
 ---
 
@@ -69,7 +72,6 @@
 - `GET /api/v1/sync/status` — Sync status
 - `GET /api/v1/sync/log` — Sync event log
 - `POST /api/v1/sync/register-webhook` — Register ClickUp webhook
-- `POST /api/v1/sync/webhook` — Webhook receiver (legacy route)
 
 ### Webhooks
 - `POST /api/v1/webhooks/clickup` — ClickUp webhook endpoint
@@ -78,29 +80,34 @@
 
 ## Key Architectural Decisions
 
-1. **Fetch full task on every webhook** — один код-пасс нормализации, минимальная нагрузка на API при текущем объёме
+1. **Fetch full task on every webhook** — один код-пасс нормализации, минимум API calls
 2. **sync_hash (MD5)** — предотвращает лишние записи и бесконечные циклы двусторонней синхронизации
 3. **Dual company resolution** — сначала кастом-поле "Company", потом имя папки как fallback
 4. **Dual DB connections** — PgBouncer (port 6543) для API, Direct (port 5432) для sync/migrations
 5. **user_id everywhere** — готовность к multi-tenancy
 6. **Commit per list** — sync коммитит после каждого списка, чтобы избежать statement_timeout
-7. **Skip closed tasks on insert** — задачи с `status_type=closed` не создаются в БД, но обновляются если уже есть
-8. **Single-list sync mode** — временно синкается только список `901410057231` ("Доска задач") через `DEV_SYNC_LIST_ID` в scheduler и frontend
+7. **Skip closed tasks on insert** — задачи с `status_type=closed` не создаются, но обновляются если уже есть
+8. **Single-list sync mode** — временно синкается только список `901410057231` ("Доска задач")
+9. **Supervisor pattern** — проактивные ритуалы управляются Supervisor, а не простым cron; поддерживает recovery после downtime
 
 ---
 
-## Company Distribution (TrueCodeLab)
+## Proactive AI System
 
-| Company | Tasks | Company | Tasks |
-|---------|-------|---------|-------|
-| Санек | 563 | Chomp&Chomp | 46 |
-| Updevision | 81 | Cubics Soft | 27 |
-| Yerevan Mall | 75 | Garage Mall | 26 |
-| GMM | 55 | YM Admin Panel | 26 |
-| (untagged) | 55 | Own | 17 |
-| Alocator EXT | 47 | TrueCodeLab | 12 |
+### Ритуалы (Asia/Yerevan timezone)
 
-**Overdue tasks:** 28
+| Время | Ритуал | Recovery до |
+|-------|--------|-------------|
+| 10:30 | Morning Plan | 14:00 |
+| 14:00 | Midday Replan | 18:00 |
+| 21:00 | EOD Review | 23:00 |
+
+### Компоненты
+
+- **DailyPlanner** — генерирует структурированные планы через Claude (must_do / should_do / can_wait / blocked)
+- **Supervisor** — каждые 5 мин проверяет `DailyState`, запускает ритуалы, обрабатывает recovery
+- **AdaptiveMessenger** — выбирает тон (assertive / neutral / casual / soft) на основе контекста; recovery-префиксы чередуются
+- **DailyContext** — краткосрочная память дня: активность пользователя, история взаимодействий
 
 ---
 
@@ -109,27 +116,36 @@
 ```
 nini-ai-agent/
 ├── backend/
-│   ├── alembic/                    # DB migrations
+│   ├── alembic/                    # DB migrations (9 applied)
 │   ├── app/
 │   │   ├── main.py                 # FastAPI app + lifespan
 │   │   ├── config.py               # pydantic-settings
 │   │   ├── database.py             # Dual engines (pooled + direct)
-│   │   ├── dependencies.py         # DI (get_db, get_user)
-│   │   ├── models/                 # SQLAlchemy ORM (6 tables)
+│   │   ├── dependencies.py         # DI (DAVIT_USER_ID)
+│   │   ├── models/                 # SQLAlchemy ORM (9 tables)
+│   │   │   ├── daily_plan.py       # Morning/midday/EOD plans
+│   │   │   ├── daily_state.py      # Ritual execution state per day
+│   │   │   └── daily_context.py    # Short-term daily memory
 │   │   ├── schemas/                # Pydantic request/response
 │   │   ├── routers/                # health, tasks, projects, sync, webhooks
 │   │   ├── services/
 │   │   │   ├── clickup/            # client, normalizer, webhook_handler, task_sync
-│   │   │   └── sync_engine.py      # Full sync orchestrator
+│   │   │   ├── sync_engine.py      # Full sync orchestrator
+│   │   │   ├── supervisor.py       # Proactive AI supervisor layer
+│   │   │   └── ai/
+│   │   │       ├── nini_brain.py   # Claude conversational AI + tools
+│   │   │       ├── daily_planner.py # Morning/midday/EOD plan generation
+│   │   │       └── adaptive_messenger.py # Context-aware message framing
 │   │   ├── core/                   # exceptions, logging
-│   │   └── tasks/                  # Background sync scheduler (6h)
-│   ├── tests/                      # 7 tests (normalizer)
+│   │   └── tasks/
+│   │       ├── sync_scheduler.py   # Background sync (every 6h)
+│   │       └── daily_jobs.py       # Supervisor loop (every 5 min)
+│   ├── tests/
 │   ├── pyproject.toml
 │   ├── Dockerfile
 │   └── .env
-├── frontend/                       # Phase 4 — React stub
+├── frontend/                       # React Telegram Mini App
 ├── docker-compose.dev.yml
-├── Makefile
-├── PROJECT_STATUS.md               # This file
-└── TODO.md                         # Task tracker
+├── PROJECT_STATUS.md
+└── TODO.md
 ```
