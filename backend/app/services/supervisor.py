@@ -207,19 +207,23 @@ class Supervisor:
             ping_reason = ""
 
             if estimate_min:
-                half_min = estimate_min / 2
-                if not session.get("mid_checked") and elapsed_min >= half_min:
-                    should_ping = True
-                    ping_reason = "work_session_mid_check"
-                    session["mid_checked"] = True
-                elif session.get("mid_checked") and not session.get("result_asked") and elapsed_min >= estimate_min:
-                    should_ping = True
-                    ping_reason = "work_session_time_up"
-                    session["result_asked"] = True
-                elif session.get("result_asked"):
-                    # Time is up, result was asked, still no response — treat as idle
+                # Divide estimate into 3 intervals: check at 1/3, 2/3, and end
+                interval_min = estimate_min / 3
+                checks_done = session.get("checks_done", 0)
+                next_check_at = interval_min * (checks_done + 1)
+
+                if elapsed_min >= estimate_min and checks_done >= 3:
+                    # Time is up AND all checks done, still no response → idle ping
                     await self._check_idle_ping(db, context, now)
                     return
+                elif elapsed_min >= next_check_at:
+                    should_ping = True
+                    remaining = max(0, int(estimate_min - elapsed_min))
+                    if elapsed_min >= estimate_min:
+                        ping_reason = "work_session_time_up"
+                    else:
+                        ping_reason = "work_session_progress_check"
+                    session["checks_done"] = checks_done + 1
             else:
                 # No estimate — check every 30 min
                 last_check_str = session.get("last_check_at")
@@ -340,10 +344,16 @@ class Supervisor:
         else:
             tone_guide = "Максимальное давление. Пинг #{count}. Не отстанешь.".format(count=ping_count)
 
+        # Build remaining time info for work sessions
+        remaining_info = ""
+        if work_session and work_session.get("estimate_min"):
+            remaining = max(0, work_session["estimate_min"] - elapsed_min)
+            remaining_info = f" Осталось ~{int(remaining)} мин из {work_session['estimate_min']}."
+
         reason_descriptions = {
             "idle_ping": f"Давит молчит уже {inactive_min} минут. Нужно выяснить чем он занимается и подтолкнуть к работе.",
-            "work_session_mid_check": f"Давит сказал что работает над задачей. Прошла половина времени. Проверь прогресс.",
-            "work_session_time_up": f"Время на задачу вышло. Спроси результат.",
+            "work_session_progress_check": f"Давит работает над задачей. Прошло {elapsed_min} мин.{remaining_info} Спроси как прогресс, успевает ли.",
+            "work_session_time_up": f"Время на задачу ВЫШЛО (прошло {elapsed_min} мин из {work_session.get('estimate_min', '?')}). Спроси результат — закрыл или нет.",
             "work_session_no_estimate_check": f"Давит работает над задачей но не дал оценку по времени. Прошло {elapsed_min} мин. Узнай как дела и попроси оценку.",
         }
 
