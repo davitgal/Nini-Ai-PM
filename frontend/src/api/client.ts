@@ -43,3 +43,7 @@ export function syncWorkspace(workspaceId: string): Promise<SyncResultResponse> 
 export function syncAll(): Promise<SyncResultResponse[]> {
   return post('/api/v1/sync/full')
 }
+
+export function cleanupAndSync(): Promise<SyncResultResponse> {
+  return post('/api/v1/sync/cleanup')
+}

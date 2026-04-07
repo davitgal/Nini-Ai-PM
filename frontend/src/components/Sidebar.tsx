@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { fetchWorkspaces, syncWorkspace, syncAll } from '../api/client'
+import { fetchWorkspaces, syncWorkspace, syncAll, cleanupAndSync } from '../api/client'
 import type { WorkspaceInfo, SyncResultResponse } from '../types'
 
 export default function Sidebar() {
@@ -75,6 +75,20 @@ export default function Sidebar() {
         }
         setLastResult(combined)
       }
+    } catch {
+      setLastResult({ workspace: '', created: 0, updated: 0, skipped: 0, archived: 0, errors: -1 })
+    } finally {
+      setSyncing(null)
+    }
+  }
+
+  async function handleCleanup() {
+    setMenuOpen(false)
+    setLastResult(null)
+    setSyncing('cleanup')
+    try {
+      const result = await cleanupAndSync()
+      setLastResult(result)
     } catch {
       setLastResult({ workspace: '', created: 0, updated: 0, skipped: 0, archived: 0, errors: -1 })
     } finally {
@@ -285,6 +299,26 @@ export default function Sidebar() {
                   onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                 >
                   ⟳ Sync all workspaces
+                </button>
+                <div style={{ borderTop: '1px solid #2a2a3d' }} />
+                <button
+                  onClick={handleCleanup}
+                  style={{
+                    width: '100%',
+                    padding: '10px 14px',
+                    fontSize: '13px',
+                    textAlign: 'left',
+                    color: '#f87171',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                    transition: 'background 0.1s',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#222235')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  🧹 Cleanup + full import
                 </button>
                 {workspaces.length > 0 && <div style={{ borderTop: '1px solid #2a2a3d' }} />}
                 {workspaces.map((ws) => (

@@ -159,6 +159,63 @@ async def sync_single_workspace(
             )
 
 
+@router.post("/cleanup", response_model=SyncResult)
+async def cleanup_and_sync(
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
+    """Archive tasks from wrong lists, then do a full sync of the target list.
+
+    Step 1: Archive all DB tasks NOT belonging to SYNC_LIST_ID.
+    Step 2: Full sync of SYNC_LIST_ID (fetch all tasks, reconcile).
+    """
+    from datetime import datetime, timezone
+
+    async with direct_session_factory() as db:
+        try:
+            # Step 1: archive tasks from other lists
+            wrong_tasks_result = await db.execute(
+                select(UnifiedTask).where(
+                    UnifiedTask.user_id == user_id,
+                    UnifiedTask.clickup_list_id != SYNC_LIST_ID,
+                    UnifiedTask.archived.is_(False),
+                )
+            )
+            wrong_tasks = wrong_tasks_result.scalars().all()
+            cleanup_count = len(wrong_tasks)
+            for task in wrong_tasks:
+                task.archived = True
+                task.sync_direction = "inbound"
+                task.last_synced_at = datetime.now(timezone.utc)
+            await db.commit()
+            logger.info("Cleanup: archived %d tasks from wrong lists", cleanup_count)
+
+            # Step 2: full sync of target list
+            ws_result = await db.execute(
+                select(Workspace).where(
+                    Workspace.user_id == user_id,
+                    Workspace.sync_enabled.is_(True),
+                )
+            )
+            workspace = ws_result.scalars().first()
+            if not workspace:
+                return SyncResult(workspace="—", created=0, updated=0, skipped=0, archived=cleanup_count, errors=0)
+
+            engine = SyncEngine(db, user_id)
+            sr = await engine.sync_list_direct(workspace, SYNC_LIST_ID)
+
+            return SyncResult(
+                workspace=workspace.name,
+                created=sr.created,
+                updated=sr.updated,
+                skipped=sr.skipped,
+                archived=cleanup_count + sr.archived,
+                errors=sr.errors,
+            )
+        except Exception as e:
+            logger.exception("Cleanup sync failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+
+
 @router.get("/status", response_model=list[SyncStatusResponse])
 async def sync_status(
     db: AsyncSession = Depends(get_db),
