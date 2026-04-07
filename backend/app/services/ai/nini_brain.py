@@ -285,25 +285,28 @@ TOOLS = [
     {
         "name": "get_daily_plan",
         "description": (
-            "Retrieve a saved daily plan from the database. "
-            "Use this when the user asks about today's plan, yesterday's plan, what was planned, "
-            "what happened during the day, or EOD results. "
-            "plan_type: 'morning' | 'midday' | 'eod'. "
-            "date: ISO format (e.g. '2026-04-07'), defaults to today if omitted."
+            "Retrieve the day's planning state from the database — all available plans for a date "
+            "(morning, midday replan, EOD) plus daily context (user activity, interactions, risks). "
+            "Always use this when the user asks about: today's plan, what was planned, what changed "
+            "during the day, EOD results, or anything about a specific day's tasks. "
+            "Returns all plans that exist for the date so you can synthesize the full picture — "
+            "e.g. if midday replan exists, that supersedes the morning plan for current priorities. "
+            "plan_type: 'morning' | 'midday' | 'eod' | 'all' (default 'all'). "
+            "date: ISO format YYYY-MM-DD, defaults to today."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "plan_type": {
                     "type": "string",
-                    "description": "morning | midday | eod",
+                    "description": "morning | midday | eod | all (default: all)",
                 },
                 "date": {
                     "type": "string",
                     "description": "Date in YYYY-MM-DD format. Defaults to today.",
                 },
             },
-            "required": ["plan_type"],
+            "required": [],
         },
     },
 ]
@@ -873,49 +876,77 @@ class NiniBrain:
         from datetime import date as date_type
         from zoneinfo import ZoneInfo
         from app.models.daily_plan import DailyPlan
+        from app.models.daily_context import DailyContext
 
-        plan_type = params.get("plan_type", "morning")
+        plan_type = params.get("plan_type", "all")
         date_str = params.get("date")
+        tz = ZoneInfo("Asia/Yerevan")
 
         if date_str:
             try:
                 plan_date = date_type.fromisoformat(date_str)
             except ValueError:
-                plan_date = datetime.now(ZoneInfo("Asia/Yerevan")).date()
+                plan_date = datetime.now(tz).date()
         else:
-            plan_date = datetime.now(ZoneInfo("Asia/Yerevan")).date()
+            plan_date = datetime.now(tz).date()
 
-        result = await db.execute(
-            select(DailyPlan).where(
-                DailyPlan.user_id == DAVIT_USER_ID,
-                DailyPlan.plan_date == plan_date,
-                DailyPlan.plan_type == plan_type,
+        # Fetch all plans for this date (or specific type)
+        query = select(DailyPlan).where(
+            DailyPlan.user_id == DAVIT_USER_ID,
+            DailyPlan.plan_date == plan_date,
+        )
+        if plan_type != "all":
+            query = query.where(DailyPlan.plan_type == plan_type)
+
+        plans_result = await db.execute(query)
+        plans = plans_result.scalars().all()
+
+        # Fetch daily context for additional signal
+        ctx_result = await db.execute(
+            select(DailyContext).where(
+                DailyContext.user_id == DAVIT_USER_ID,
+                DailyContext.context_date == plan_date,
             )
         )
-        plan = result.scalar_one_or_none()
+        ctx = ctx_result.scalar_one_or_none()
 
-        if not plan:
+        def _plan_dict(p: DailyPlan) -> dict:
             return {
-                "found": False,
-                "plan_type": plan_type,
-                "date": plan_date.isoformat(),
-                "message": f"План '{plan_type}' за {plan_date} не найден — скорее всего не был создан.",
+                "plan_type": p.plan_type,
+                "executed_at": p.job_finished_at.isoformat() if p.job_finished_at else None,
+                "must_do": p.must_do,
+                "should_do": p.should_do,
+                "can_wait": p.can_wait,
+                "blocked": p.blocked,
+                "completed": p.completed,
+                "deferred": p.deferred,
+                "risks": p.risks,
+                "summary": p.summary,
             }
 
+        # Determine latest active plan (midday > morning, eod is final)
+        type_order = {"morning": 0, "midday": 1, "eod": 2}
+        sorted_plans = sorted(plans, key=lambda p: type_order.get(p.plan_type, 0))
+        latest = sorted_plans[-1] if sorted_plans else None
+
         return {
-            "found": True,
-            "plan_type": plan.plan_type,
-            "date": plan.plan_date.isoformat(),
-            "must_do": plan.must_do,
-            "should_do": plan.should_do,
-            "can_wait": plan.can_wait,
-            "blocked": plan.blocked,
-            "completed": plan.completed,
-            "deferred": plan.deferred,
-            "risks": plan.risks,
-            "summary": plan.summary,
-            "job_status": plan.job_status,
-            "executed_at": plan.job_finished_at.isoformat() if plan.job_finished_at else None,
+            "date": plan_date.isoformat(),
+            "plans_available": [p.plan_type for p in sorted_plans],
+            # Latest plan = most up-to-date priorities (use this for current state)
+            "latest_plan": _plan_dict(latest) if latest else None,
+            # All plans for full history
+            "all_plans": {p.plan_type: _plan_dict(p) for p in sorted_plans},
+            # Daily context
+            "context": {
+                "user_active_today": ctx.user_active_today if ctx else False,
+                "interaction_count": ctx.interaction_count if ctx else 0,
+                "current_risks": ctx.current_risks if ctx else [],
+                "last_active_at": ctx.user_last_active_at.isoformat() if ctx and ctx.user_last_active_at else None,
+            } if ctx else None,
+            "note": (
+                "latest_plan содержит актуальные приоритеты с учётом всех перепланирований. "
+                "Если есть midday — он важнее morning для текущего состояния дня."
+            ),
         }
 
 
