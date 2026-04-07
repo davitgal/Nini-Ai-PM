@@ -690,6 +690,30 @@ class NiniBrain:
         if task.clickup_task_id and clickup_data and settings.clickup_api_token:
             client = ClickUpClient(settings.clickup_api_token)
             try:
+                # Resolve status name to exact ClickUp status (case-sensitive match required)
+                if "status" in clickup_data and task.clickup_list_id:
+                    try:
+                        list_data = await client.get_list(task.clickup_list_id)
+                        available = list_data.get("statuses", [])
+                        requested = clickup_data["status"].lower()
+                        matched = next(
+                            (s["status"] for s in available if s["status"].lower() == requested),
+                            None,
+                        )
+                        if matched:
+                            clickup_data["status"] = matched
+                            task.status = matched
+                            logger.info("Resolved status '%s' → '%s'", requested, matched)
+                        else:
+                            names = [s["status"] for s in available]
+                            logger.warning("Status '%s' not found in list. Available: %s", requested, names)
+                            return {
+                                "error": f"Status '{requested}' not found in ClickUp list. "
+                                         f"Available statuses: {names}"
+                            }
+                    except Exception as e:
+                        logger.warning("Could not fetch list statuses: %s", e)
+
                 await client.update_task(task.clickup_task_id, clickup_data)
                 synced_to_clickup = True
                 logger.info("Task updated in ClickUp: %s, fields: %s", task.clickup_task_id, updated_fields)

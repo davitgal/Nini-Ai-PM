@@ -77,7 +77,17 @@ class ClickUpClient:
                 if attempt < retries - 1 and response.status_code >= 500:
                     await asyncio.sleep(2**attempt)
                     continue
-                raise
+                # Re-raise with ClickUp response body so callers can see the actual error
+                try:
+                    body = response.json()
+                    msg = body.get("err") or body.get("error") or str(body)
+                except Exception:
+                    msg = response.text
+                raise httpx.HTTPStatusError(
+                    f"HTTP {response.status_code}: {msg}",
+                    request=response.request,
+                    response=response,
+                ) from None
             except httpx.RequestError:
                 if attempt < retries - 1:
                     await asyncio.sleep(2**attempt)
