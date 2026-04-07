@@ -1,5 +1,6 @@
 """Telegram bot for Nini AI — Davit's personal project manager."""
 
+import asyncio
 import logging
 from typing import Any, Awaitable, Callable
 
@@ -22,6 +23,24 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 brain = NiniBrain()
+
+# Global bot instance — set in start_bot(), used by proactive jobs
+_bot: Bot | None = None
+
+
+async def send_proactive_message(text: str) -> None:
+    """Send a message to the owner without a user prompt (called by background jobs)."""
+    if not _bot or not settings.telegram_owner_id:
+        logger.warning("Cannot send proactive message: bot not ready or owner_id not set")
+        return
+    try:
+        await _bot.send_message(
+            chat_id=settings.telegram_owner_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        logger.exception("Failed to send proactive Telegram message")
 
 
 class OwnerOnlyMiddleware(BaseMiddleware):
@@ -91,6 +110,7 @@ async def cmd_clear(message: Message) -> None:
 
 @router.message(Command("tasks"))
 async def cmd_tasks(message: Message) -> None:
+    asyncio.create_task(_track_user_activity("/tasks", "command"))
     await _auto_sync_if_needed(message)
     await message.chat.do("typing")
     response = await brain.chat(
@@ -102,6 +122,7 @@ async def cmd_tasks(message: Message) -> None:
 
 @router.message(Command("overdue"))
 async def cmd_overdue(message: Message) -> None:
+    asyncio.create_task(_track_user_activity("/overdue", "command"))
     await _auto_sync_if_needed(message)
     await message.chat.do("typing")
     response = await brain.chat(
@@ -189,6 +210,9 @@ async def handle_message(message: Message) -> None:
     if not message.text:
         return
 
+    # Track user activity for Supervisor's context-aware decisions
+    asyncio.create_task(_track_user_activity(message.text, "free_text"))
+
     await _auto_sync_if_needed(message)
     await message.chat.do("typing")
     try:
@@ -199,13 +223,24 @@ async def handle_message(message: Message) -> None:
         await message.answer(f"Блин, что-то сломалось: <code>{e}</code>")
 
 
+async def _track_user_activity(text: str, category: str = "user_message") -> None:
+    """Fire-and-forget: record user activity in DailyContext for the Supervisor."""
+    try:
+        from app.services.supervisor import record_user_activity
+        await record_user_activity(text, category)
+    except Exception:
+        logger.debug("Activity tracking skipped", exc_info=True)
+
+
 async def start_bot() -> None:
     """Start the Telegram bot with long polling."""
+    global _bot
+
     if not settings.telegram_bot_token:
         logger.warning("TELEGRAM_BOT_TOKEN not set, skipping bot startup")
         return
 
-    bot = Bot(
+    _bot = Bot(
         token=settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
@@ -214,7 +249,9 @@ async def start_bot() -> None:
 
     logger.info("Starting Nini Telegram bot (long polling)")
     try:
-        await dp.start_polling(bot, close_bot_session=True)
+        await dp.start_polling(_bot, close_bot_session=True)
     except Exception:
         logger.exception("Telegram bot crashed")
         raise
+    finally:
+        _bot = None

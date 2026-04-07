@@ -13,6 +13,7 @@ from app.core.exceptions import NiniError
 from app.core.logging import setup_logging
 from app.routers import health, projects, sync, tasks, webhooks
 from app.services.telegram.bot import start_bot
+from app.tasks.daily_jobs import daily_jobs_loop
 from app.tasks.sync_scheduler import periodic_full_sync
 
 logger = logging.getLogger(__name__)
@@ -24,10 +25,13 @@ async def lifespan(app: FastAPI):
     logger.info("Nini backend starting up (env=%s)", settings.app_env)
     # Start background sync scheduler
     sync_task = asyncio.create_task(periodic_full_sync())
+    # Start proactive daily jobs (morning plan, midday replan, EOD review)
+    daily_task = asyncio.create_task(daily_jobs_loop())
     # Start Telegram bot (long polling)
     bot_task = asyncio.create_task(start_bot())
     yield
     bot_task.cancel()
+    daily_task.cancel()
     sync_task.cancel()
     logger.info("Nini backend shutting down")
 
