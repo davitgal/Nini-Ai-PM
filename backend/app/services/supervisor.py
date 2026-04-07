@@ -363,14 +363,15 @@ class Supervisor:
 
         # Build remaining time info for work sessions
         remaining_info = ""
-        if work_session and work_session.get("estimate_min"):
+        if work_session and isinstance(work_session, dict) and work_session.get("estimate_min"):
             remaining = max(0, work_session["estimate_min"] - elapsed_min)
             remaining_info = f" Осталось ~{int(remaining)} мин из {work_session['estimate_min']}."
 
+        ws = work_session or {}
         reason_descriptions = {
             "idle_ping": f"Давит молчит уже {inactive_min} минут. Нужно выяснить чем он занимается и подтолкнуть к работе.",
             "work_session_progress_check": f"Давит работает над задачей. Прошло {elapsed_min} мин.{remaining_info} Спроси как прогресс, успевает ли.",
-            "work_session_time_up": f"Время на задачу ВЫШЛО (прошло {elapsed_min} мин из {work_session.get('estimate_min', '?')}). Спроси результат — закрыл или нет.",
+            "work_session_time_up": f"Время на задачу ВЫШЛО (прошло {elapsed_min} мин из {ws.get('estimate_min', '?')}). Спроси результат — закрыл или нет.",
             "work_session_no_estimate_check": f"Давит работает над задачей но не дал оценку по времени. Прошло {elapsed_min} мин. Узнай как дела и попроси оценку.",
         }
 
