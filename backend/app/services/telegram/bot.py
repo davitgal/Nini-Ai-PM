@@ -182,7 +182,7 @@ async def _auto_sync_if_needed(message: Message) -> bool:
             total_created, total_updated, total_archived = 0, 0, 0
             for ws in workspaces:
                 try:
-                    sr = await engine.sync_list_direct(ws, SYNC_LIST_ID)
+                    sr = await engine.sync_list_incremental(ws, SYNC_LIST_ID)
                     total_created += sr.created
                     total_updated += sr.updated
                     total_archived += sr.archived

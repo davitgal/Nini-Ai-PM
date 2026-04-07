@@ -259,6 +259,87 @@ class SyncEngine:
 
         return result
 
+    async def sync_list_incremental(self, workspace: Workspace, list_id: str) -> SyncResult:
+        """Incremental sync — only fetch tasks updated since last sync.
+
+        Uses workspace.last_full_sync as cursor. If nothing changed, returns immediately.
+        Falls back to sync_list_direct on first run (no cursor yet).
+        """
+        if not workspace.last_full_sync:
+            logger.info("No last_full_sync — falling back to full list sync")
+            return await self.sync_list_direct(workspace, list_id)
+
+        result = SyncResult()
+        token = workspace.clickup_api_token
+        if not token:
+            return result
+
+        # ClickUp expects milliseconds
+        since_ms = int(workspace.last_full_sync.timestamp() * 1000)
+
+        self._seen_clickup_ids: set[str] = set()
+        client = ClickUpClient(token)
+        try:
+            logger.info(
+                "Incremental sync: list_id=%s since=%s",
+                list_id,
+                workspace.last_full_sync.strftime("%Y-%m-%d %H:%M:%S"),
+            )
+
+            tasks = await client.get_all_tasks(
+                list_id, include_closed=True, date_updated_gt=since_ms
+            )
+
+            if not tasks:
+                logger.info("Incremental sync: nothing changed since last sync")
+                workspace.last_full_sync = datetime.now(UTC)
+                await self.db.commit()
+                return result
+
+            logger.info("Incremental sync: %d tasks changed, syncing...", len(tasks))
+
+            # Fetch list metadata once for denormalized fields
+            list_info = await client.get_list(list_id)
+            list_name = list_info.get("name", "") if list_info else ""
+            space_name = list_info.get("space", {}).get("name", "") if list_info else ""
+            folder_info = list_info.get("folder", {}) if list_info else {}
+            folder_name = None if folder_info.get("hidden") else folder_info.get("name")
+
+            for task in tasks:
+                try:
+                    normalized = normalize_task(
+                        task,
+                        folder_name=folder_name,
+                        space_name=space_name,
+                        list_name=list_name,
+                    )
+                    normalized["workspace_id"] = workspace.id
+                    normalized["workspace_name"] = workspace.name
+                    action = await self._upsert_task(normalized)
+                    if action == "created":
+                        result.created += 1
+                    elif action == "updated":
+                        result.updated += 1
+                    else:
+                        result.skipped += 1
+                except Exception:
+                    logger.exception("Error syncing task %s", task.id)
+                    result.errors += 1
+
+            await self.db.commit()
+
+            workspace.last_full_sync = datetime.now(UTC)
+            await self.db.commit()
+
+            logger.info(
+                "Incremental sync complete: created=%d updated=%d skipped=%d errors=%d",
+                result.created, result.updated, result.skipped, result.errors,
+            )
+        finally:
+            await client.close()
+
+        return result
+
     async def sync_single_task(
         self,
         client: ClickUpClient,

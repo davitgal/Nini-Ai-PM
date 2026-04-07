@@ -122,23 +122,34 @@ class ClickUpClient:
         page: int = 0,
         include_closed: bool = False,
         subtasks: bool = True,
+        date_updated_gt: int | None = None,
     ) -> list[ClickUpTask]:
         params: dict = {
             "page": str(page),
             "subtasks": str(subtasks).lower(),
             "include_closed": str(include_closed).lower(),
         }
+        if date_updated_gt is not None:
+            params["date_updated_gt"] = str(date_updated_gt)
         data = await self._request("GET", f"/list/{list_id}/task", params=params)
         return [ClickUpTask.model_validate(t) for t in data.get("tasks", [])]
 
     async def get_all_tasks(
-        self, list_id: str, include_closed: bool = False
+        self,
+        list_id: str,
+        include_closed: bool = False,
+        date_updated_gt: int | None = None,
     ) -> list[ClickUpTask]:
-        """Paginate through all tasks in a list."""
+        """Paginate through all tasks in a list, optionally filtered by update time."""
         all_tasks: list[ClickUpTask] = []
         page = 0
         while True:
-            tasks = await self.get_tasks(list_id, page=page, include_closed=include_closed)
+            tasks = await self.get_tasks(
+                list_id,
+                page=page,
+                include_closed=include_closed,
+                date_updated_gt=date_updated_gt,
+            )
             if not tasks:
                 break
             all_tasks.extend(tasks)
