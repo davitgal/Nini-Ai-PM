@@ -180,6 +180,85 @@ class SyncEngine:
 
         return result
 
+    async def sync_list_direct(self, workspace: Workspace, list_id: str) -> SyncResult:
+        """Sync a single list by ID directly — no hierarchy walk, much faster.
+
+        Fetches tasks straight from the list, upserts, then reconciles only that list.
+        """
+        result = SyncResult()
+        token = workspace.clickup_api_token
+        if not token:
+            logger.error("No API token for workspace %s", workspace.name)
+            return result
+
+        self._seen_clickup_ids: set[str] = set()
+        client = ClickUpClient(token)
+        try:
+            logger.info("Direct list sync: list_id=%s workspace=%s", list_id, workspace.name)
+
+            # Fetch list metadata for names
+            list_info = await client.get_list(list_id)
+            list_name = list_info.get("name", "") if list_info else ""
+            space_name = list_info.get("space", {}).get("name", "") if list_info else ""
+            folder_name = list_info.get("folder", {}).get("name") if list_info else None
+            # folder hidden = no real folder
+            if list_info and list_info.get("folder", {}).get("hidden"):
+                folder_name = None
+
+            # Upsert project entry for the list
+            list_project_id = await self._upsert_project(
+                workspace_id=workspace.id,
+                clickup_id=list_id,
+                clickup_type="list",
+                name=list_name,
+                parent_id=None,
+                company_tag=folder_name,
+            )
+            await self.db.commit()
+
+            await self._sync_list_tasks(
+                client=client,
+                list_id=list_id,
+                project_id=list_project_id,
+                folder_name=folder_name,
+                result=result,
+                workspace_id=workspace.id,
+                workspace_name=workspace.name,
+                space_name=space_name,
+                list_name=list_name,
+            )
+            await self.db.commit()
+
+            # Reconcile only this list
+            db_tasks = await self.db.execute(
+                select(UnifiedTask).where(
+                    UnifiedTask.workspace_id == workspace.id,
+                    UnifiedTask.user_id == self.user_id,
+                    UnifiedTask.clickup_list_id == list_id,
+                    UnifiedTask.archived.is_(False),
+                    UnifiedTask.clickup_task_id.isnot(None),
+                )
+            )
+            for task in db_tasks.scalars().all():
+                if task.clickup_task_id not in self._seen_clickup_ids:
+                    task.archived = True
+                    task.sync_direction = "inbound"
+                    task.last_synced_at = datetime.now(UTC)
+                    result.archived += 1
+            await self.db.commit()
+
+            workspace.last_full_sync = datetime.now(UTC)
+            await self.db.commit()
+
+            logger.info(
+                "Direct list sync complete: created=%d updated=%d archived=%d errors=%d",
+                result.created, result.updated, result.archived, result.errors,
+            )
+        finally:
+            await client.close()
+
+        return result
+
     async def sync_single_task(
         self,
         client: ClickUpClient,

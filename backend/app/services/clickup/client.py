@@ -109,6 +109,11 @@ class ClickUpClient:
         )
         return [ClickUpList.model_validate(item) for item in data.get("lists", [])]
 
+    async def get_list(self, list_id: str) -> dict:
+        """Get a single list by ID (returns raw dict for flexible metadata access)."""
+        data = await self._request("GET", f"/list/{list_id}")
+        return data if isinstance(data, dict) else {}
+
     # === Tasks ===
 
     async def get_tasks(

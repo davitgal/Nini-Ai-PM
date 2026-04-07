@@ -19,6 +19,9 @@ from app.models.workspace import Workspace
 from app.services.ai.nini_brain import NiniBrain
 from app.services.sync_engine import SyncEngine
 
+# Only sync this list (Davit daily tasks)
+SYNC_LIST_ID = "901410057231"
+
 logger = logging.getLogger(__name__)
 
 router = Router()
@@ -179,7 +182,7 @@ async def _auto_sync_if_needed(message: Message) -> bool:
             total_created, total_updated, total_archived = 0, 0, 0
             for ws in workspaces:
                 try:
-                    sr = await engine.full_sync(ws)
+                    sr = await engine.sync_list_direct(ws, SYNC_LIST_ID)
                     total_created += sr.created
                     total_updated += sr.updated
                     total_archived += sr.archived

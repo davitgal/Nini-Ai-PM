@@ -36,13 +36,13 @@ async def periodic_full_sync() -> None:
                 engine = SyncEngine(db, DAVIT_USER_ID)
                 for ws in workspaces:
                     try:
-                        sr = await engine.full_sync(ws, only_list_id=DEV_SYNC_LIST_ID)
+                        sr = await engine.sync_list_direct(ws, DEV_SYNC_LIST_ID)
                         logger.info(
-                            "Scheduled sync %s: created=%d updated=%d skipped=%d errors=%d",
+                            "Scheduled sync %s: created=%d updated=%d archived=%d errors=%d",
                             ws.name,
                             sr.created,
                             sr.updated,
-                            sr.skipped,
+                            sr.archived,
                             sr.errors,
                         )
                     except Exception:
