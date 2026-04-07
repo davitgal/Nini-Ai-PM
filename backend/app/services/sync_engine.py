@@ -405,10 +405,8 @@ class SyncEngine:
         )
         existing_task = existing.scalar_one_or_none()
 
-        # Skip closed tasks that don't exist in DB yet — no point importing them
-        # But if they already exist, still sync so status changes are captured
-        if existing_task is None and normalized.get("status_type") == "closed":
-            return "skipped"
+        # Always import tasks regardless of status — completed tasks are kept for statistics
+        # (previously skipped closed tasks on first import, but this breaks history tracking)
 
         if existing_task:
             # Check sync_hash — skip if unchanged

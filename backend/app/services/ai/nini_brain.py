@@ -746,8 +746,11 @@ class NiniBrain:
             finally:
                 await client.close()
 
-        # Delete from local DB
-        await db.delete(task)
+        # Soft-delete: archive in local DB instead of hard delete
+        # Completed/deleted tasks are kept for historical statistics
+        task.archived = True
+        task.sync_direction = "inbound"
+        task.last_synced_at = datetime.now(timezone.utc)
         await db.commit()
 
         return {"deleted": True, "task": task_info}
