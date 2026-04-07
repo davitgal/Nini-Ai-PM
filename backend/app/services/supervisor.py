@@ -359,6 +359,13 @@ class Supervisor:
             last_ping = context.last_ping_at
             ping_count = context.ping_count or 0
 
+            # Don't ping based on stale activity from before this process started.
+            # Wait for the user to reach out first after a deploy/restart.
+            if last_active:
+                la = last_active if last_active.tzinfo else last_active.replace(tzinfo=timezone.utc)
+                if la <= _PROCESS_START_UTC:
+                    return  # User hasn't written anything since this deploy — don't ping yet
+
             # Calculate inactivity
             inactive_sec = 0
             last_active_str = "давно"
