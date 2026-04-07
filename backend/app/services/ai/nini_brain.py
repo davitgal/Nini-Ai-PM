@@ -282,6 +282,30 @@ TOOLS = [
             "required": ["memory_id"],
         },
     },
+    {
+        "name": "get_daily_plan",
+        "description": (
+            "Retrieve a saved daily plan from the database. "
+            "Use this when the user asks about today's plan, yesterday's plan, what was planned, "
+            "what happened during the day, or EOD results. "
+            "plan_type: 'morning' | 'midday' | 'eod'. "
+            "date: ISO format (e.g. '2026-04-07'), defaults to today if omitted."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "plan_type": {
+                    "type": "string",
+                    "description": "morning | midday | eod",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "Date in YYYY-MM-DD format. Defaults to today.",
+                },
+            },
+            "required": ["plan_type"],
+        },
+    },
 ]
 
 
@@ -427,6 +451,8 @@ class NiniBrain:
                     return await self._tool_save_memory(db, params)
                 elif name == "delete_memory":
                     return await self._tool_delete_memory(db, params)
+                elif name == "get_daily_plan":
+                    return await self._tool_get_daily_plan(db, params)
                 else:
                     return {"error": f"Unknown tool: {name}"}
         except Exception as e:
@@ -840,6 +866,56 @@ class NiniBrain:
                 "count": len(high_priority),
                 "tasks": [_task_to_dict(t) for t in high_priority],
             },
+        }
+
+
+    async def _tool_get_daily_plan(self, db: AsyncSession, params: dict) -> dict:
+        from datetime import date as date_type
+        from zoneinfo import ZoneInfo
+        from app.models.daily_plan import DailyPlan
+
+        plan_type = params.get("plan_type", "morning")
+        date_str = params.get("date")
+
+        if date_str:
+            try:
+                plan_date = date_type.fromisoformat(date_str)
+            except ValueError:
+                plan_date = datetime.now(ZoneInfo("Asia/Yerevan")).date()
+        else:
+            plan_date = datetime.now(ZoneInfo("Asia/Yerevan")).date()
+
+        result = await db.execute(
+            select(DailyPlan).where(
+                DailyPlan.user_id == DAVIT_USER_ID,
+                DailyPlan.plan_date == plan_date,
+                DailyPlan.plan_type == plan_type,
+            )
+        )
+        plan = result.scalar_one_or_none()
+
+        if not plan:
+            return {
+                "found": False,
+                "plan_type": plan_type,
+                "date": plan_date.isoformat(),
+                "message": f"План '{plan_type}' за {plan_date} не найден — скорее всего не был создан.",
+            }
+
+        return {
+            "found": True,
+            "plan_type": plan.plan_type,
+            "date": plan.plan_date.isoformat(),
+            "must_do": plan.must_do,
+            "should_do": plan.should_do,
+            "can_wait": plan.can_wait,
+            "blocked": plan.blocked,
+            "completed": plan.completed,
+            "deferred": plan.deferred,
+            "risks": plan.risks,
+            "summary": plan.summary,
+            "job_status": plan.job_status,
+            "executed_at": plan.job_finished_at.isoformat() if plan.job_finished_at else None,
         }
 
 
