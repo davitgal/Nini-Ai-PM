@@ -298,6 +298,8 @@ class NiniBrain:
 
     def _get_client(self) -> anthropic.AsyncAnthropic:
         if self._client is None:
+            if not settings.anthropic_api_key:
+                raise RuntimeError("ANTHROPIC_API_KEY не задан — проверь переменные окружения на Railway")
             self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         return self._client
 
