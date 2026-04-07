@@ -139,7 +139,8 @@ async def sync_single_workspace(
                 raise HTTPException(status_code=404, detail="Workspace not found")
 
             engine = SyncEngine(db, user_id)
-            sr = await engine.full_sync(workspace, only_list_id=list_id)
+            target_list = list_id or SYNC_LIST_ID
+            sr = await engine.sync_list_direct(workspace, target_list)
             return SyncResult(
                 workspace=workspace.name,
                 created=sr.created,
