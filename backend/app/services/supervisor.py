@@ -46,7 +46,8 @@ ON_TIME_WINDOW_MINUTES = 30
 PING_INTERVAL_MINUTES = 15
 WORK_CHECK_NO_ESTIMATE_MINUTES = 30
 WORKING_HOURS_START = 10
-WORKING_HOURS_END = 22
+# No fixed end — Nini stops pinging only when user says goodnight
+# (sleep mode tracked via DailyContext.work_session = {"type": "sleep"})
 
 _planner = DailyPlanner()
 
@@ -164,7 +165,13 @@ class Supervisor:
     ) -> None:
         """Ping user if idle, or check in on active work session."""
 
-        if not (WORKING_HOURS_START <= now.hour < WORKING_HOURS_END):
+        # Don't ping before working hours start (morning)
+        if now.hour < WORKING_HOURS_START:
+            return
+
+        # Check if user said goodnight (sleep mode)
+        work_session = context.work_session
+        if work_session and work_session.get("type") == "sleep":
             return
 
         if state.morning_status not in ("done",) and not context.user_active_today:
@@ -172,8 +179,6 @@ class Supervisor:
 
         if state.eod_status == "done":
             return
-
-        work_session = context.work_session
 
         if work_session:
             await self._check_work_session(db, context, state, work_session, now)
