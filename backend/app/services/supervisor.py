@@ -139,7 +139,10 @@ class Supervisor:
             reminder_count = getattr(state, f"{plan_type}_reminder_count", 0)
             message = build_message(plan, context, is_recovery, reminder_count)
 
-            await _send_to_user(message)
+            sent = await _send_to_user(message)
+            if not sent:
+                logger.warning("Ritual '%s' message not delivered — will retry next cycle", plan_type)
+                return
 
             setattr(state, f"{plan_type}_status", "done")
             setattr(state, f"{plan_type}_executed_at", now.astimezone(timezone.utc))
@@ -261,10 +264,13 @@ class Supervisor:
                     work_session=session,
                     elapsed_min=int(elapsed_min),
                 )
-                await _send_to_user(msg)
-                context.work_session = dict(session)
-                await db.commit()
-                logger.info("Work session ping sent: reason=%s, task='%s'", ping_reason, task_title)
+                sent = await _send_to_user(msg)
+                if sent:
+                    context.work_session = dict(session)
+                    await db.commit()
+                    logger.info("Work session ping sent: reason=%s, task='%s'", ping_reason, task_title)
+                else:
+                    logger.warning("Work session ping NOT delivered — will retry next cycle")
 
         except Exception:
             logger.exception("Error in _check_work_session")
@@ -303,12 +309,15 @@ class Supervisor:
                 ping_count=ping_count + 1,
                 inactive_min=int(inactive_sec / 60),
             )
-            await _send_to_user(msg)
+            sent = await _send_to_user(msg)
 
-            context.last_ping_at = now_utc
-            context.ping_count = ping_count + 1
-            await db.commit()
-            logger.info("Idle ping #%d sent (inactive %d min)", ping_count + 1, int(inactive_sec / 60))
+            if sent:
+                context.last_ping_at = now_utc
+                context.ping_count = ping_count + 1
+                await db.commit()
+                logger.info("Idle ping #%d sent (inactive %d min)", ping_count + 1, int(inactive_sec / 60))
+            else:
+                logger.warning("Idle ping #%d NOT delivered — DB not updated, will retry next cycle", ping_count + 1)
 
         except Exception:
             logger.exception("Error in _check_idle_ping")
@@ -604,14 +613,30 @@ async def record_user_activity(message_text: str, category: str = "user_message"
 # Telegram helper
 # ------------------------------------------------------------------
 
-async def _send_to_user(text: str) -> None:
+async def _send_to_user(text: str) -> bool:
+    """Send message to user via Telegram. Returns True if sent successfully."""
     if not text:
-        return
+        return False
     try:
-        from app.services.telegram.bot import send_proactive_message
-        await send_proactive_message(text)
+        import asyncio
+        import app.services.telegram.bot as bot_module
+
+        # Wait up to 30s for bot to initialize (race condition after deploy)
+        for _ in range(6):
+            if bot_module._bot is not None:
+                break
+            logger.info("Waiting for Telegram bot to initialize...")
+            await asyncio.sleep(5)
+
+        if bot_module._bot is None:
+            logger.warning("Telegram bot still not initialized after 30s — message dropped")
+            return False
+
+        await bot_module.send_proactive_message(text)
+        return True
     except Exception:
         logger.exception("Failed to send proactive Telegram message")
+        return False
 
 
 # Singleton instance
