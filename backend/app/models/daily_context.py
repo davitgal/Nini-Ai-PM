@@ -45,6 +45,14 @@ class DailyContext(Base, TenantMixin, TimestampMixin):
     # Free-form AI notes about the day (optional context for future prompts)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Proactive ping tracking
+    last_ping_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ping_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    # Active work session: {task_title, estimate_min, started_at, mid_checked, result_asked}
+    # Set by Nini when user says they're working on something with a time estimate
+    work_session: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     __table_args__ = (
         # One context record per user per day
         Index("idx_daily_contexts_user_date", "user_id", "context_date", unique=True),

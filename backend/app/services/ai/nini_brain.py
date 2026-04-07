@@ -309,6 +309,46 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "set_work_session",
+        "description": (
+            "Call this when Davit says he's starting to work on a specific task — with or without "
+            "a time estimate. This enables Nini to check in at the halfway point (if estimate given) "
+            "or every 30 minutes (no estimate), and ask for results when time is up. "
+            "Call this when user says things like: 'сейчас буду делать X', 'работаю над Y на 2 часа', "
+            "'занимаюсь Z', 'начинаю X'. "
+            "If the user gives a time estimate (e.g. '2 часа', '30 минут', '1.5 часа'), "
+            "pass it as estimate_min."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_title": {
+                    "type": "string",
+                    "description": "What task the user is working on",
+                },
+                "estimate_min": {
+                    "type": "integer",
+                    "description": "Estimated time in minutes, if user mentioned one. Omit if not mentioned.",
+                },
+            },
+            "required": ["task_title"],
+        },
+    },
+    {
+        "name": "clear_work_session",
+        "description": (
+            "Call this when Davit says he's done with a task or moving on. "
+            "Clears the active work session so Nini stops checking in on it. "
+            "Call when user says: 'готово', 'закончил', 'сделал', 'перехожу к другому', "
+            "'закрыл', 'всё', 'done'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
 
 
@@ -456,6 +496,10 @@ class NiniBrain:
                     return await self._tool_delete_memory(db, params)
                 elif name == "get_daily_plan":
                     return await self._tool_get_daily_plan(db, params)
+                elif name == "set_work_session":
+                    return await self._tool_set_work_session(db, params)
+                elif name == "clear_work_session":
+                    return await self._tool_clear_work_session(db)
                 else:
                     return {"error": f"Unknown tool: {name}"}
         except Exception as e:
@@ -975,6 +1019,84 @@ class NiniBrain:
                 "Если есть midday — он важнее morning для текущего состояния дня."
             ),
         }
+
+
+    async def _tool_set_work_session(self, db: AsyncSession, params: dict) -> dict:
+        """Register that user is working on a task with optional time estimate."""
+        from datetime import date as date_type
+        from zoneinfo import ZoneInfo
+        from app.models.daily_context import DailyContext
+
+        task_title = params.get("task_title", "").strip()
+        if not task_title:
+            return {"error": "task_title is required"}
+
+        estimate_min = params.get("estimate_min")
+        tz = ZoneInfo("Asia/Yerevan")
+        today = datetime.now(tz).date()
+        now_utc = datetime.now(timezone.utc)
+
+        result = await db.execute(
+            select(DailyContext).where(
+                DailyContext.user_id == DAVIT_USER_ID,
+                DailyContext.context_date == today,
+            )
+        )
+        ctx = result.scalar_one_or_none()
+        if not ctx:
+            import uuid as _uuid
+            ctx = DailyContext(
+                id=_uuid.uuid4(),
+                user_id=DAVIT_USER_ID,
+                context_date=today,
+            )
+            db.add(ctx)
+
+        session = {
+            "task_title": task_title,
+            "started_at": now_utc.isoformat(),
+            "mid_checked": False,
+            "result_asked": False,
+        }
+        if estimate_min:
+            session["estimate_min"] = int(estimate_min)
+
+        ctx.work_session = session
+        await db.commit()
+
+        msg = f"Ок, фиксирую: работаешь над «{task_title}»"
+        if estimate_min:
+            msg += f" ~{estimate_min} минут. Проверю в середине."
+        else:
+            msg += ". Буду проверять каждые 30 минут."
+
+        logger.info("Work session set: task='%s' estimate=%s", task_title, estimate_min)
+        return {"ok": True, "work_session": session, "message": msg}
+
+    async def _tool_clear_work_session(self, db: AsyncSession) -> dict:
+        """Clear the active work session when user is done with the task."""
+        from datetime import date as date_type
+        from zoneinfo import ZoneInfo
+        from app.models.daily_context import DailyContext
+
+        tz = ZoneInfo("Asia/Yerevan")
+        today = datetime.now(tz).date()
+
+        result = await db.execute(
+            select(DailyContext).where(
+                DailyContext.user_id == DAVIT_USER_ID,
+                DailyContext.context_date == today,
+            )
+        )
+        ctx = result.scalar_one_or_none()
+        if ctx and ctx.work_session:
+            old_task = ctx.work_session.get("task_title", "задача")
+            ctx.work_session = None
+            await db.commit()
+            logger.info("Work session cleared for task '%s'", old_task)
+            return {"ok": True, "cleared_task": old_task}
+
+        return {"ok": True, "message": "No active work session"}
 
 
 def _task_to_dict(task: UnifiedTask) -> dict:

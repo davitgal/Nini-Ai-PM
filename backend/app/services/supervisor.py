@@ -3,13 +3,17 @@
 Runs every 5 minutes and decides:
 1. Whether a ritual (morning/midday/eod) should run
 2. Whether it's a late/recovery execution
-3. Whether to mark a ritual as permanently skipped (past recovery window)
+3. Whether to proactively ping the user if they're idle
+4. Whether to check in on an active work session at mid-point / end
 
-Replaces the simple time-check loop in daily_jobs.py with proper state tracking,
-recovery support, and context-aware messaging.
+Ping logic:
+- If user is idle (no response for 15+ min) → ping every 15 min, escalating tone
+- If user set a work session with estimate → check at halfway, then at end
+- If work session without estimate → check every 30 min
 """
 
 import logging
+import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -39,6 +43,81 @@ RITUAL_SCHEDULE = [
 # A ritual run within this window of the trigger time is considered "on-time"
 ON_TIME_WINDOW_MINUTES = 30
 
+# Proactive ping settings
+PING_INTERVAL_MINUTES = 15
+WORK_CHECK_NO_ESTIMATE_MINUTES = 30
+WORKING_HOURS_START = 10  # 10:00
+WORKING_HOURS_END = 22    # 22:00
+
+# -----------------------------------------------------------------------
+# Ping message pools — varied by escalation level, never template-feeling
+# -----------------------------------------------------------------------
+
+_PING_L1 = [  # First ping — casual nudge
+    "Эй, {time} уже — ты там? Пора работать",
+    "Давит, алло. {time} на часах. Что делаешь?",
+    "Молчишь с {last_active}. Начинаем или нет?",
+    "{time} — по плану должна быть работа. Ты живой?",
+]
+_PING_L2 = [  # 2nd–3rd ping — настойчивее
+    "Уже {minutes} минут без ответа. Серьёзно, что происходит?",
+    "Пишу второй раз. Объясняй где ты и что делаешь",
+    "Молчишь {minutes} минут. Буду писать каждые 15 пока не ответишь",
+    "{minutes} минут тишины. Это норма?",
+]
+_PING_L3 = [  # 4th–5th ping — жёстко
+    "Третий раз пишу. Каждые 15 минут — это не шутка",
+    "{minutes} минут игнора. Следующий пинг через 15 минут",
+    "Продолжаем. Каждые. 15. Минут. Пока не ответишь.",
+    "Хорошо, значит договорились — пингую каждые 15 минут весь день",
+]
+_PING_L4 = [  # 6th+ ping — максимальное давление
+    "Пинг #{count}. Продолжаю.",
+    "#{count} сообщение без ответа. Мне не сложно.",
+    "Я не устану. #{count}. Следующий через 15 минут.",
+    "Ок. #{count}. Можем делать это весь день.",
+]
+
+_MID_CHECK = [
+    "Половина времени на «{task}» прошла. Успеваешь?",
+    "«{task}» — {elapsed} мин из {estimate}. Всё ок?",
+    "Дедлайн по «{task}» через {remaining} мин. Укладываешься?",
+    "{elapsed} минут прошло на «{task}». На полпути — как там?",
+]
+
+_RESULT_CHECK = [
+    "Время на «{task}» вышло — закрыл?",
+    "«{task}» — {estimate} минут прошло. Что по итогу?",
+    "Ну что, «{task}» готово или нет?",
+    "Дедлайн по «{task}» истёк. Результат?",
+]
+
+_NO_ESTIMATE_CHECK = [
+    "Как там «{task}»? Прогресс есть?",
+    "{elapsed} минут прошло — «{task}» двигается?",
+    "«{task}» — что сделал за {elapsed} минут?",
+    "Напомни: «{task}» — ты ещё на нём или закончил?",
+]
+
+
+def _build_ping_message(count: int, time_str: str, inactive_min: int, last_active_str: str) -> str:
+    if count <= 1:
+        pool = _PING_L1
+    elif count <= 3:
+        pool = _PING_L2
+    elif count <= 5:
+        pool = _PING_L3
+    else:
+        pool = _PING_L4
+    tpl = random.choice(pool)
+    return tpl.format(
+        time=time_str,
+        minutes=inactive_min,
+        last_active=last_active_str,
+        count=count,
+    )
+
+
 _planner = DailyPlanner()
 
 
@@ -49,7 +128,12 @@ class Supervisor:
         """Main supervisor cycle — called every 5 minutes."""
         async with direct_session_factory() as db:
             try:
-                await self._check_all_rituals(db)
+                state = await self._get_or_create_state(db)
+                context = await self._get_or_create_context(db)
+                now = datetime.now(USER_TZ)
+
+                await self._check_all_rituals(db, state, context, now)
+                await self._check_proactive_ping(db, state, context, now)
             except Exception:
                 logger.exception("Supervisor cycle failed")
 
@@ -57,11 +141,9 @@ class Supervisor:
     # Core ritual logic
     # ------------------------------------------------------------------
 
-    async def _check_all_rituals(self, db: AsyncSession) -> None:
-        state = await self._get_or_create_state(db)
-        context = await self._get_or_create_context(db)
-        now = datetime.now(USER_TZ)
-
+    async def _check_all_rituals(
+        self, db: AsyncSession, state: DailyState, context: DailyContext, now: datetime
+    ) -> None:
         for ritual in RITUAL_SCHEDULE:
             await self._check_ritual(db, state, context, ritual, now)
 
@@ -102,16 +184,6 @@ class Supervisor:
         on_time_window_end = trigger_dt + timedelta(minutes=ON_TIME_WINDOW_MINUTES)
         is_recovery = now > on_time_window_end
 
-        if is_recovery:
-            logger.info(
-                "Executing ritual '%s' in recovery mode (trigger was %s, now %s)",
-                plan_type,
-                trigger_dt.strftime("%H:%M"),
-                now.strftime("%H:%M"),
-            )
-        else:
-            logger.info("Executing ritual '%s' on schedule", plan_type)
-
         await self._execute_ritual(db, state, context, plan_type, is_recovery, now)
 
     async def _execute_ritual(
@@ -125,22 +197,17 @@ class Supervisor:
     ) -> None:
         """Generate plan, build adaptive message, send to user, update state."""
         try:
-            # 1. Generate the structured plan (saved to DB by planner)
             plan = await self._generate_plan(db, plan_type)
 
-            # 2. Build context-aware message (no extra Claude call)
             reminder_count = getattr(state, f"{plan_type}_reminder_count", 0)
             message = build_message(plan, context, is_recovery, reminder_count)
 
-            # 3. Send to Telegram
             await _send_to_user(message)
 
-            # 4. Update state: mark ritual as done
             setattr(state, f"{plan_type}_status", "done")
             setattr(state, f"{plan_type}_executed_at", now.astimezone(timezone.utc))
             await db.commit()
 
-            # 5. Record in DailyContext interaction history
             from app.services.ai.adaptive_messenger import decide_tone
             tone = decide_tone(context, plan, reminder_count, is_recovery)
             await self._record_interaction(
@@ -151,13 +218,179 @@ class Supervisor:
                 tone=tone,
             )
 
-            logger.info(
-                "Ritual '%s' executed successfully (is_recovery=%s, tone=%s)",
-                plan_type, is_recovery, tone,
-            )
+            logger.info("Ritual '%s' executed (is_recovery=%s, tone=%s)", plan_type, is_recovery, tone)
 
         except Exception:
             logger.exception("Failed to execute ritual '%s'", plan_type)
+
+    # ------------------------------------------------------------------
+    # Proactive ping logic
+    # ------------------------------------------------------------------
+
+    async def _check_proactive_ping(
+        self,
+        db: AsyncSession,
+        state: DailyState,
+        context: DailyContext,
+        now: datetime,
+    ) -> None:
+        """Ping user if idle, or check in on active work session."""
+
+        # Only during working hours
+        if not (WORKING_HOURS_START <= now.hour < WORKING_HOURS_END):
+            return
+
+        # Don't ping before morning ritual ran — user hasn't even seen their plan yet
+        if state.morning_status not in ("done",) and not context.user_active_today:
+            return
+
+        # EOD done — day is over, stop all pinging
+        if state.eod_status == "done":
+            return
+
+        work_session = context.work_session
+
+        if work_session:
+            await self._check_work_session(db, context, state, work_session, now)
+        else:
+            await self._check_idle_ping(db, context, now)
+
+    async def _check_work_session(
+        self,
+        db: AsyncSession,
+        context: DailyContext,
+        state: DailyState,
+        session: dict,
+        now: datetime,
+    ) -> None:
+        """Check mid-point and end of an active work session."""
+        try:
+            started_at_str = session.get("started_at", "")
+            if not started_at_str:
+                return
+
+            started_at = datetime.fromisoformat(started_at_str)
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+
+            now_utc = now.astimezone(timezone.utc)
+            elapsed_min = (now_utc - started_at).total_seconds() / 60
+            task_title = session.get("task_title", "задача")
+            estimate_min = session.get("estimate_min")
+
+            if estimate_min:
+                half_min = estimate_min / 2
+                # Mid-check at halfway point
+                if not session.get("mid_checked") and elapsed_min >= half_min:
+                    remaining = max(0, int(estimate_min - elapsed_min))
+                    msg = random.choice(_MID_CHECK).format(
+                        task=task_title,
+                        elapsed=int(elapsed_min),
+                        estimate=estimate_min,
+                        remaining=remaining,
+                    )
+                    await _send_to_user(msg)
+                    session["mid_checked"] = True
+                    context.work_session = dict(session)
+                    await db.commit()
+                    logger.info("Work session mid-check sent for '%s'", task_title)
+                    return
+
+                # Result check when time is up
+                if session.get("mid_checked") and not session.get("result_asked") and elapsed_min >= estimate_min:
+                    msg = random.choice(_RESULT_CHECK).format(
+                        task=task_title,
+                        estimate=estimate_min,
+                    )
+                    await _send_to_user(msg)
+                    session["result_asked"] = True
+                    context.work_session = dict(session)
+                    await db.commit()
+                    logger.info("Work session result-check sent for '%s'", task_title)
+                    return
+
+                # After result asked — treat as idle and ping if no response
+                if session.get("result_asked"):
+                    await self._check_idle_ping(db, context, now)
+
+            else:
+                # No estimate — check every 30 min
+                last_check_str = session.get("last_check_at")
+                if last_check_str:
+                    last_check = datetime.fromisoformat(last_check_str)
+                    if last_check.tzinfo is None:
+                        last_check = last_check.replace(tzinfo=timezone.utc)
+                    if (now_utc - last_check).total_seconds() < WORK_CHECK_NO_ESTIMATE_MINUTES * 60:
+                        return
+
+                msg = random.choice(_NO_ESTIMATE_CHECK).format(
+                    task=task_title,
+                    elapsed=int(elapsed_min),
+                )
+                await _send_to_user(msg)
+                session["last_check_at"] = now_utc.isoformat()
+                context.work_session = dict(session)
+                await db.commit()
+                logger.info("Work session no-estimate check sent for '%s'", task_title)
+
+        except Exception:
+            logger.exception("Error in _check_work_session")
+
+    async def _check_idle_ping(
+        self,
+        db: AsyncSession,
+        context: DailyContext,
+        now: datetime,
+    ) -> None:
+        """Ping if user has been idle for 15+ minutes."""
+        try:
+            now_utc = now.astimezone(timezone.utc)
+            last_active = context.user_last_active_at
+            last_ping = context.last_ping_at
+            ping_count = context.ping_count or 0
+
+            # Calculate inactivity
+            inactive_sec = 0
+            last_active_str = "давно"
+            if last_active:
+                lа = last_active if last_active.tzinfo else last_active.replace(tzinfo=timezone.utc)
+                inactive_sec = (now_utc - lа).total_seconds()
+                inactive_min = int(inactive_sec / 60)
+                if inactive_min < 60:
+                    last_active_str = f"{inactive_min} мин назад"
+                else:
+                    last_active_str = f"{inactive_min // 60}ч назад"
+                # Not idle yet
+                if inactive_sec < PING_INTERVAL_MINUTES * 60:
+                    return
+            else:
+                # Never been active today — only ping if morning ritual ran
+                inactive_sec = PING_INTERVAL_MINUTES * 60 + 1  # force ping
+
+            inactive_min = int(inactive_sec / 60)
+
+            # Respect ping interval — don't spam faster than every 15 min
+            if last_ping:
+                lp = last_ping if last_ping.tzinfo else last_ping.replace(tzinfo=timezone.utc)
+                since_last_ping = (now_utc - lp).total_seconds()
+                if since_last_ping < PING_INTERVAL_MINUTES * 60:
+                    return
+
+            msg = _build_ping_message(
+                count=ping_count + 1,
+                time_str=now.strftime("%H:%M"),
+                inactive_min=inactive_min,
+                last_active_str=last_active_str,
+            )
+            await _send_to_user(msg)
+
+            context.last_ping_at = now_utc
+            context.ping_count = ping_count + 1
+            await db.commit()
+            logger.info("Idle ping #%d sent (inactive %d min)", ping_count + 1, inactive_min)
+
+        except Exception:
+            logger.exception("Error in _check_idle_ping")
 
     # ------------------------------------------------------------------
     # Plan generation
@@ -246,7 +479,9 @@ class Supervisor:
 # ------------------------------------------------------------------
 
 async def record_user_activity(message_text: str, category: str = "user_message") -> None:
-    """Update DailyContext with a user interaction. Called from bot.py on every message."""
+    """Update DailyContext with a user interaction. Called from bot.py on every message.
+    Also resets ping_count — user responded, so escalation counter starts over.
+    """
     try:
         async with direct_session_factory() as db:
             now_utc = datetime.now(timezone.utc)
@@ -270,6 +505,9 @@ async def record_user_activity(message_text: str, category: str = "user_message"
             ctx.user_last_active_at = now_utc
             ctx.user_active_today = True
             ctx.interaction_count = (ctx.interaction_count or 0) + 1
+
+            # User responded — reset consecutive ping count
+            ctx.ping_count = 0
 
             interactions = list(ctx.interactions or [])
             interactions.append({
