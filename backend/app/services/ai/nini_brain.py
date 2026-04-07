@@ -377,10 +377,15 @@ class NiniBrain:
     def clear_history(self, chat_id: int) -> None:
         self._conversations.pop(chat_id, None)
 
+    def has_activity(self, chat_id: int) -> bool:
+        """True if there's been at least one interaction since process start."""
+        return chat_id in self._last_activity
+
     def needs_sync(self, chat_id: int) -> bool:
-        """Check if 30+ minutes passed since last interaction."""
+        """Check if 30+ minutes passed since last interaction (in-memory only)."""
         last = self._last_activity.get(chat_id)
         if last is None:
+            # First call after restart — caller should check DB before trusting this
             return True
         elapsed = (datetime.now(timezone.utc) - last).total_seconds()
         return elapsed >= SYNC_COOLDOWN_MINUTES * 60

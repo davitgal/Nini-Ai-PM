@@ -183,8 +183,37 @@ _SYNC_CHANGED_MSGS = [
 
 
 async def _auto_sync_if_needed(message: Message) -> bool:
-    """Run full sync if 30+ min since last interaction. Returns True if sync ran."""
+    """Run incremental sync if 30+ min since last interaction. Returns True if sync ran.
+
+    After a restart (in-memory state is empty), checks the DB workspace.last_full_sync
+    instead of triggering a sync unconditionally — avoids sync storm on every deploy.
+    """
     chat_id = message.chat.id
+
+    # First message after process restart — check DB to see if recently synced
+    if not brain.has_activity(chat_id):
+        try:
+            async with async_session_factory() as db:
+                ws_result = await db.execute(
+                    select(Workspace).where(
+                        Workspace.user_id == DAVIT_USER_ID,
+                        Workspace.sync_enabled.is_(True),
+                    ).limit(1)
+                )
+                ws = ws_result.scalar_one_or_none()
+                if ws and ws.last_full_sync:
+                    last_sync = ws.last_full_sync
+                    if last_sync.tzinfo is None:
+                        from datetime import timezone as _tz
+                        last_sync = last_sync.replace(tzinfo=_tz.utc)
+                    elapsed = (datetime.now(timezone.utc) - last_sync).total_seconds()
+                    if elapsed < SYNC_COOLDOWN_MINUTES * 60:
+                        # Synced recently before restart — skip sync, seed in-memory timer
+                        brain.touch_activity(chat_id)
+                        return False
+        except Exception:
+            logger.debug("Could not check last_full_sync from DB", exc_info=True)
+
     if not brain.needs_sync(chat_id):
         brain.touch_activity(chat_id)
         return False

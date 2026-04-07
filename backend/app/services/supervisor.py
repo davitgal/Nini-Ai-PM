@@ -33,6 +33,11 @@ logger = logging.getLogger(__name__)
 
 USER_TZ = ZoneInfo("Asia/Yerevan")
 
+# Time when this process started — used to avoid pinging immediately after a deploy
+_PROCESS_START_UTC = datetime.now(timezone.utc)
+# Grace period after startup: don't fire proactive pings during this window
+_STARTUP_GRACE_SECONDS = 10 * 60  # 10 minutes
+
 # Ritual schedule: trigger time + recovery_until_hour (after which we give up)
 RITUAL_SCHEDULE = [
     {"type": "morning", "hour": 10, "minute": 30, "recovery_until_hour": 14},
@@ -235,6 +240,11 @@ class Supervisor:
         now: datetime,
     ) -> None:
         """Ping user if idle, or check in on active work session."""
+
+        # Don't ping right after a deploy — give the process 10 minutes to settle
+        now_utc = now.astimezone(timezone.utc)
+        if (now_utc - _PROCESS_START_UTC).total_seconds() < _STARTUP_GRACE_SECONDS:
+            return
 
         # Only during working hours
         if not (WORKING_HOURS_START <= now.hour < WORKING_HOURS_END):
