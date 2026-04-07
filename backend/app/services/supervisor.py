@@ -59,9 +59,17 @@ class Supervisor:
         """Main supervisor cycle — called every 5 minutes."""
         async with direct_session_factory() as db:
             try:
+                now = datetime.now(USER_TZ)
                 state = await self._get_or_create_state(db)
                 context = await self._get_or_create_context(db)
-                now = datetime.now(USER_TZ)
+
+                # Late night (00:00–09:59): today's context is empty because
+                # it's a new calendar day, but the user may still be working
+                # from yesterday. Use yesterday's context for ping decisions.
+                if now.hour < WORKING_HOURS_START and not context.user_active_today:
+                    yesterday_ctx = await self._get_yesterday_context(db)
+                    if yesterday_ctx and yesterday_ctx.user_active_today:
+                        context = yesterday_ctx
 
                 await self._check_all_rituals(db, state, context, now)
                 await self._check_proactive_ping(db, state, context, now)
@@ -165,20 +173,24 @@ class Supervisor:
     ) -> None:
         """Ping user if idle, or check in on active work session."""
 
-        # Don't ping before working hours start (morning)
-        if now.hour < WORKING_HOURS_START:
-            return
-
         # Check if user said goodnight (sleep mode)
         work_session = context.work_session
         if work_session and work_session.get("type") == "sleep":
             return
 
-        if state.morning_status not in ("done",) and not context.user_active_today:
-            return
+        # Before working hours: only ping if user was active yesterday
+        # (late night work continuation). context is already set to
+        # yesterday's context by run_cycle() in this case.
+        if now.hour < WORKING_HOURS_START:
+            if not context.user_active_today:
+                return  # No activity yesterday either — don't ping at night
 
-        if state.eod_status == "done":
-            return
+        # During working hours: wait for morning ritual or first user message
+        if now.hour >= WORKING_HOURS_START:
+            if state.morning_status not in ("done",) and not context.user_active_today:
+                return
+
+        # EOD is just a report, NOT end of work. Keep pinging after EOD.
 
         if work_session:
             await self._check_work_session(db, context, state, work_session, now)
@@ -500,6 +512,18 @@ class Supervisor:
             await db.commit()
             await db.refresh(ctx)
         return ctx
+
+    async def _get_yesterday_context(self, db: AsyncSession) -> DailyContext | None:
+        """Get yesterday's context — used for late-night continuity."""
+        from datetime import date as date_type
+        yesterday = datetime.now(USER_TZ).date() - timedelta(days=1)
+        result = await db.execute(
+            select(DailyContext).where(
+                DailyContext.user_id == DAVIT_USER_ID,
+                DailyContext.context_date == yesterday,
+            )
+        )
+        return result.scalar_one_or_none()
 
     # ------------------------------------------------------------------
     # Context updates
