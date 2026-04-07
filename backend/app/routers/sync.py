@@ -19,6 +19,8 @@ from app.services.sync_engine import SyncEngine
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 
+SYNC_LIST_ID = "901410057231"  # Davit daily tasks
+
 WEBHOOK_EVENTS = [
     "taskCreated",
     "taskUpdated",
@@ -80,7 +82,7 @@ async def trigger_full_sync(
             engine = SyncEngine(db, user_id)
             for ws in workspaces:
                 try:
-                    sr = await engine.full_sync(ws)
+                    sr = await engine.sync_list_direct(ws, SYNC_LIST_ID)
                     results.append(
                         SyncResult(
                             workspace=ws.name,
