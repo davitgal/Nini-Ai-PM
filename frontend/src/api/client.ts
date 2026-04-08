@@ -1,4 +1,12 @@
-import type { TaskListResponse, TaskStats, WorkspaceInfo, SyncResultResponse } from '../types'
+import type {
+  NiniIssue,
+  NiniIssueCreatePayload,
+  NiniIssueListResponse,
+  TaskListResponse,
+  TaskStats,
+  WorkspaceInfo,
+  SyncResultResponse,
+} from '../types'
 
 const BASE = ''
 
@@ -13,6 +21,32 @@ async function get<T>(path: string): Promise<T> {
 
 async function post<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { method: 'POST' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText)
+    throw new Error(`API ${res.status}: ${text}`)
+  }
+  return res.json()
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText)
+    throw new Error(`API ${res.status}: ${text}`)
+  }
+  return res.json()
+}
+
+async function patchJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText)
     throw new Error(`API ${res.status}: ${text}`)
@@ -46,4 +80,20 @@ export function syncAll(): Promise<SyncResultResponse[]> {
 
 export function cleanupAndSync(): Promise<SyncResultResponse> {
   return post('/api/v1/sync/cleanup')
+}
+
+export function fetchNiniIssues(params: Record<string, string> = {}): Promise<NiniIssueListResponse> {
+  const qs = new URLSearchParams(params).toString()
+  return get(`/api/v1/nini-issues${qs ? `?${qs}` : ''}`)
+}
+
+export function createNiniIssue(payload: NiniIssueCreatePayload): Promise<NiniIssue> {
+  return postJson('/api/v1/nini-issues', payload)
+}
+
+export function updateNiniIssue(
+  issueId: string,
+  payload: { status?: string; severity?: string; resolution_notes?: string }
+): Promise<NiniIssue> {
+  return patchJson(`/api/v1/nini-issues/${issueId}`, payload)
 }

@@ -8,6 +8,7 @@ from alembic import context
 from app.config import settings
 from app.models.base import Base
 from app.models.knowledge import KnowledgeBase  # noqa: F401
+from app.models.nini_issue import NiniIssue  # noqa: F401
 from app.models.project import Project  # noqa: F401
 from app.models.sync_log import SyncLog  # noqa: F401
 from app.models.task import UnifiedTask  # noqa: F401

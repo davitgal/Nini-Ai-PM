@@ -58,3 +58,36 @@ export interface SyncResultResponse {
   archived: number
   errors: number
 }
+
+export interface NiniIssue {
+  id: string
+  title: string
+  description: string
+  issue_type: string
+  severity: 'low' | 'medium' | 'high' | 'critical' | string
+  status: 'open' | 'in_progress' | 'fixed' | 'ignored' | string
+  source: string
+  task_title: string | null
+  conversation_snippet: string | null
+  metadata: Record<string, unknown>
+  resolved_at: string | null
+  resolution_notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface NiniIssueListResponse {
+  items: NiniIssue[]
+  total: number
+}
+
+export interface NiniIssueCreatePayload {
+  title: string
+  description: string
+  issue_type: string
+  severity: string
+  source?: string
+  task_title?: string
+  conversation_snippet?: string
+  metadata?: Record<string, unknown>
+}

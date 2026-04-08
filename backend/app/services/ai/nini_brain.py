@@ -13,6 +13,7 @@ from app.config import settings
 from app.database import async_session_factory
 from app.dependencies import DAVIT_USER_ID
 from app.models.knowledge import KnowledgeBase
+from app.models.nini_issue import NiniIssue
 from app.models.project import Project
 from app.models.task import UnifiedTask
 from app.services.clickup.client import ClickUpClient
@@ -114,11 +115,29 @@ SYSTEM_PROMPT = """Ты — Нини, персональный AI проект-�
 ## Правила
 - Используй данные задач для конкретных советов
 - При перечислении задач показывай: название, компания, статус, дедлайн
+- Если обсуждается выполнение/прогресс по задачам, сначала проверь live-статусы через get_tasks и только потом делай выводы
+- При конфликте между старым планом и live-данными приоритет всегда у live-данных из ClickUp
 - Проактивно тыкай в просроченные задачи
 - Предлагай, на чём сфокусироваться
 - Если Давит спрашивает что-то не связанное с задачами, коротко ответь и верни фокус на работу
 - Форматируй ответы для Telegram (поддерживается HTML: <b>, <i>, <code>, <pre>)
-- Не используй markdown-разметку (**, ##, etc.) — только HTML-теги"""
+- Не используй markdown-разметку (**, ##, etc.) — только HTML-теги
+
+## Логирование собственных ошибок
+- Если Давит указал на твою ошибку/неточность или ты сама поняла что сделала неверный вывод — вызови log_issue.
+- Логируй конкретно: что пошло не так, почему, и какой контекст/задача были затронуты.
+- Не логируй дубликаты в одном и том же сообщении несколько раз."""
+
+# Nini issue taxonomy for backlog logging
+NINI_ISSUE_TYPES = {
+    "logic",
+    "stale_data",
+    "wrong_conclusion",
+    "missing_context",
+    "ux",
+    "other",
+}
+NINI_ISSUE_SEVERITIES = {"low", "medium", "high", "critical"}
 
 TOOLS = [
     {
@@ -390,6 +409,28 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "log_issue",
+        "description": (
+            "Log a discovered Nini mistake/problem into the internal issue backlog. "
+            "Use when you made a wrong conclusion, used stale data, or user points out a behavior bug."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short issue title"},
+                "description": {"type": "string", "description": "What happened and why it is wrong"},
+                "issue_type": {
+                    "type": "string",
+                    "description": "logic | stale_data | wrong_conclusion | missing_context | ux | other",
+                },
+                "severity": {"type": "string", "description": "low | medium | high | critical"},
+                "task_title": {"type": "string", "description": "Optional task involved in issue"},
+                "conversation_snippet": {"type": "string", "description": "Optional short quote/context"},
+            },
+            "required": ["title", "description"],
+        },
+    },
 ]
 
 
@@ -659,6 +700,8 @@ class NiniBrain:
                     return await self._tool_set_work_session(db, params)
                 elif name == "clear_work_session":
                     return await self._tool_clear_work_session(db)
+                elif name == "log_issue":
+                    return await self._tool_log_issue(db, params)
                 else:
                     return {"error": f"Unknown tool: {name}"}
         except Exception as e:
@@ -1285,6 +1328,39 @@ class NiniBrain:
             return {"ok": True, "cleared_task": old_task}
 
         return {"ok": True, "message": "No active work session"}
+
+    async def _tool_log_issue(self, db: AsyncSession, params: dict) -> dict:
+        """Persist a Nini mistake/problem to issue backlog."""
+        title = str(params.get("title", "")).strip()
+        description = str(params.get("description", "")).strip()
+        if not title or not description:
+            return {"error": "title and description are required"}
+
+        issue_type = str(params.get("issue_type", "logic")).strip().lower()
+        if issue_type not in NINI_ISSUE_TYPES:
+            issue_type = "other"
+
+        severity = str(params.get("severity", "medium")).strip().lower()
+        if severity not in NINI_ISSUE_SEVERITIES:
+            severity = "medium"
+
+        issue = NiniIssue(
+            id=uuid.uuid4(),
+            user_id=DAVIT_USER_ID,
+            title=title[:255],
+            description=description,
+            issue_type=issue_type,
+            severity=severity,
+            status="open",
+            source="nini",
+            task_title=(str(params.get("task_title", "")).strip() or None),
+            conversation_snippet=(str(params.get("conversation_snippet", "")).strip() or None),
+            metadata_={},
+        )
+        db.add(issue)
+        await db.commit()
+        logger.info("Nini issue logged: [%s][%s] %s", issue_type, severity, title[:80])
+        return {"ok": True, "issue_id": str(issue.id)}
 
 
 def _task_to_dict(task: UnifiedTask) -> dict:

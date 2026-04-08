@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.core.exceptions import NiniError
 from app.core.logging import setup_logging
-from app.routers import health, projects, sync, tasks, webhooks
+from app.routers import health, nini_issues, projects, sync, tasks, webhooks
 from app.services.telegram.bot import start_bot
 from app.tasks.daily_jobs import daily_jobs_loop
 from app.tasks.sync_scheduler import periodic_full_sync
@@ -66,6 +66,7 @@ app.include_router(tasks.router)
 app.include_router(projects.router)
 app.include_router(sync.router)
 app.include_router(webhooks.router)
+app.include_router(nini_issues.router)
 
 # Serve frontend static files (production build)
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
