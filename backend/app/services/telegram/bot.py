@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
@@ -68,7 +69,22 @@ router.message.middleware(OwnerOnlyMiddleware())
 TG_MAX_LENGTH = 4096
 
 
+def _normalize_telegram_html(text: str) -> str:
+    """Best-effort markdown->HTML normalization for Telegram output."""
+    if not text:
+        return text
+
+    # Convert markdown links to Telegram-compatible HTML links.
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", r'<a href="\2">\1</a>', text)
+    # Convert **bold** to <b>bold</b>.
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text, flags=re.DOTALL)
+    # Remove unmatched leftover ** tokens to avoid noisy output.
+    text = text.replace("**", "")
+    return text
+
+
 def _truncate(text: str, max_len: int = TG_MAX_LENGTH) -> str:
+    text = _normalize_telegram_html(text)
     if len(text) <= max_len:
         return text
     return text[: max_len - 20] + "\n\n... (обрезано)"
