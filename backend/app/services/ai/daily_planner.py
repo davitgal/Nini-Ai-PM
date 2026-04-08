@@ -4,6 +4,9 @@ import json
 import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+USER_TZ = ZoneInfo("Asia/Yerevan")
 
 import anthropic
 from sqlalchemy import select
@@ -73,7 +76,7 @@ class DailyPlanner:
     async def generate_morning_plan(self, db: AsyncSession) -> DailyPlan:
         """Build and save the morning plan for today."""
         now = datetime.now(timezone.utc)
-        today = now.date()
+        today = datetime.now(USER_TZ).date()
 
         tasks = await _fetch_active_tasks(db)
 
@@ -136,7 +139,7 @@ class DailyPlanner:
     async def generate_midday_replan(self, db: AsyncSession) -> DailyPlan:
         """Refresh the morning plan based on current task states."""
         now = datetime.now(timezone.utc)
-        today = now.date()
+        today = datetime.now(USER_TZ).date()
 
         # Load today's morning plan
         morning = await _load_plan(db, today, "morning")
@@ -190,7 +193,7 @@ class DailyPlanner:
     async def generate_eod_review(self, db: AsyncSession) -> DailyPlan:
         """Generate end-of-day review comparing plan vs reality."""
         now = datetime.now(timezone.utc)
-        today = now.date()
+        today = datetime.now(USER_TZ).date()
         tomorrow = today + timedelta(days=1)
 
         morning = await _load_plan(db, today, "morning")

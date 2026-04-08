@@ -440,8 +440,9 @@ class Supervisor:
         )
         overdue = overdue_result.scalars().all()
 
-        # Due today
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Due today (Yerevan time boundaries converted to UTC)
+        yerevan_today = datetime.now(USER_TZ).date()
+        today_start = datetime(yerevan_today.year, yerevan_today.month, yerevan_today.day, tzinfo=USER_TZ).astimezone(timezone.utc)
         today_end = today_start + timedelta(days=1)
         due_today_result = await db.execute(
             select(UnifiedTask).where(
