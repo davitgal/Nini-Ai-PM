@@ -24,7 +24,7 @@
 
 ---
 
-## Database Schema (9 tables)
+## Database Schema (10 tables)
 
 | Table | Description |
 |-------|-------------|
@@ -37,6 +37,7 @@
 | `daily_plans` | Утренние планы, перепланирования, итоги дня |
 | `daily_states` | Статус ритуалов на каждый день (pending/done/skipped) |
 | `daily_contexts` | Краткосрочная память: активность пользователя, история взаимодействий, риски |
+| `nini_issues` | Backlog ошибок/проблем Нини (severity, status, source, resolution notes) |
 
 ---
 
@@ -50,14 +51,14 @@
 
 ---
 
-## API Endpoints (14 total)
+## API Endpoints (17 total)
 
 ### Health
 - `GET /health` — Service status
 - `GET /health/db` — Database connectivity
 
 ### Tasks
-- `GET /api/v1/tasks` — List tasks (filters: company, status, priority, assignee, overdue)
+- `GET /api/v1/tasks` — List tasks (filters: company, status, priority, assignee, overdue, `unresolved_only`, `include_total`)
 - `GET /api/v1/tasks/stats` — Aggregated statistics
 - `GET /api/v1/tasks/{id}` — Single task
 - `PATCH /api/v1/tasks/{id}` — Update task locally
@@ -76,6 +77,11 @@
 ### Webhooks
 - `POST /api/v1/webhooks/clickup` — ClickUp webhook endpoint
 
+### Nini Issues
+- `GET /api/v1/nini-issues` — List issue backlog entries (filters: status, severity)
+- `POST /api/v1/nini-issues` — Create issue backlog entry
+- `PATCH /api/v1/nini-issues/{id}` — Update issue status/severity/resolution notes
+
 ---
 
 ## Key Architectural Decisions
@@ -89,6 +95,10 @@
 7. **Skip closed tasks on insert** — задачи с `status_type=closed` не создаются, но обновляются если уже есть
 8. **Single-list sync mode** — временно синкается только список `901410057231` ("Доска задач")
 9. **Supervisor pattern** — проактивные ритуалы управляются Supervisor, а не простым cron; поддерживает recovery после downtime
+10. **Work session anti-spam** — ping cadence контролируется `last_ping_at`, чтобы исключить дубли на 5-минутном цикле
+11. **Live data over plan snapshots** — при обсуждении прогресса задач сначала проверяются live статусы через `get_tasks`
+12. **Nini issue backlog** — ошибки ассистента логируются в отдельную таблицу и отображаются в dashboard
+13. **Telegram HTML strict mode** — запрет markdown `**`; для задач обязательны ссылки `<a href="...">...`
 
 ---
 
@@ -108,6 +118,10 @@
 - **Supervisor** — каждые 5 мин проверяет `DailyState`, запускает ритуалы, обрабатывает recovery
 - **AdaptiveMessenger** — выбирает тон (assertive / neutral / casual / soft) на основе контекста; recovery-префиксы чередуются
 - **DailyContext** — краткосрочная память дня: активность пользователя, история взаимодействий
+- **Work session modes**:
+  - idle (без active task): ping каждые 15 мин
+  - active task + estimate: checks по estimate/3
+  - active task без estimate: checks каждые 5 мин (до получения оценки)
 
 ---
 
@@ -116,18 +130,19 @@
 ```
 nini-ai-agent/
 ├── backend/
-│   ├── alembic/                    # DB migrations (9 applied)
+│   ├── alembic/                    # DB migrations (10 applied)
 │   ├── app/
 │   │   ├── main.py                 # FastAPI app + lifespan
 │   │   ├── config.py               # pydantic-settings
 │   │   ├── database.py             # Dual engines (pooled + direct)
 │   │   ├── dependencies.py         # DI (DAVIT_USER_ID)
-│   │   ├── models/                 # SQLAlchemy ORM (9 tables)
+│   │   ├── models/                 # SQLAlchemy ORM (10 tables)
 │   │   │   ├── daily_plan.py       # Morning/midday/EOD plans
 │   │   │   ├── daily_state.py      # Ritual execution state per day
-│   │   │   └── daily_context.py    # Short-term daily memory
+│   │   │   ├── daily_context.py    # Short-term daily memory
+│   │   │   └── nini_issue.py       # Issue backlog model for Nini mistakes
 │   │   ├── schemas/                # Pydantic request/response
-│   │   ├── routers/                # health, tasks, projects, sync, webhooks
+│   │   ├── routers/                # health, tasks, projects, sync, webhooks, nini_issues
 │   │   ├── services/
 │   │   │   ├── clickup/            # client, normalizer, webhook_handler, task_sync
 │   │   │   ├── sync_engine.py      # Full sync orchestrator
