@@ -72,6 +72,10 @@ class ClickUpClient:
                     await asyncio.sleep(retry_after)
                     continue
                 response.raise_for_status()
+                # Some successful DELETE endpoints return empty body (204 or 200 with no JSON).
+                # Treat them as successful empty payload instead of raising JSON decode errors.
+                if not response.content:
+                    return {}
                 return response.json()
             except httpx.HTTPStatusError:
                 if attempt < retries - 1 and response.status_code >= 500:
