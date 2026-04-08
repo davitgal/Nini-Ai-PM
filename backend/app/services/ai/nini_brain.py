@@ -2,8 +2,10 @@
 
 import json
 import logging
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import anthropic
 from sqlalchemy import func, select
@@ -19,6 +21,7 @@ from app.models.task import UnifiedTask
 from app.services.clickup.client import ClickUpClient
 
 logger = logging.getLogger(__name__)
+USER_TZ = ZoneInfo("Asia/Yerevan")
 
 # ClickUp "Company" custom field — dropdown
 # AllTasks list — ALL new tasks go here, ClickUp automations sort them into folders
@@ -588,14 +591,20 @@ class NiniBrain:
     async def _build_system_prompt(self) -> str:
         """Build system prompt with all memories injected."""
         memories = await self._load_memories()
+        now_local = datetime.now(USER_TZ)
+        runtime_clock = (
+            "\n\n## Текущее время (источник истины)\n"
+            f"- Сейчас в Ереване: {now_local.strftime('%Y-%m-%d %H:%M')} (Asia/Yerevan)\n"
+            "- Для относительных дат ('сегодня', 'завтра') опирайся только на это время.\n"
+        )
         if not memories:
-            return SYSTEM_PROMPT
+            return SYSTEM_PROMPT + runtime_clock
 
         memory_block = "\n\n## Твоя память (то, что ты уже знаешь о Давите и его проектах)\n"
         for m in memories:
             memory_block += f"- [{m['category']}] {m['content']} (id: {m['id']})\n"
 
-        return SYSTEM_PROMPT + memory_block
+        return SYSTEM_PROMPT + runtime_clock + memory_block
 
     async def _load_memories(self) -> list[dict]:
         """Load all memories from DB."""
@@ -808,9 +817,10 @@ class NiniBrain:
     async def _tool_create_task(self, db: AsyncSession, params: dict) -> dict:
         due_date = None
         if params.get("due_date"):
-            due_date = datetime.fromisoformat(params["due_date"])
-            if due_date.tzinfo is None:
-                due_date = due_date.replace(tzinfo=timezone.utc)
+            try:
+                due_date = _parse_due_date_input(params["due_date"])
+            except ValueError as e:
+                return {"error": str(e)}
 
         company = params.get("company")
         priority = params.get("priority", "medium")
@@ -933,9 +943,10 @@ class NiniBrain:
                 clickup_data["priority"] = cu_priority
             updated_fields.append("priority")
         if params.get("due_date"):
-            due = datetime.fromisoformat(params["due_date"])
-            if due.tzinfo is None:
-                due = due.replace(tzinfo=timezone.utc)
+            try:
+                due = _parse_due_date_input(params["due_date"])
+            except ValueError as e:
+                return {"error": str(e)}
             task.due_date = due
             clickup_data["due_date"] = int(due.timestamp() * 1000)
             updated_fields.append("due_date")
@@ -1270,7 +1281,11 @@ class NiniBrain:
             ctx.work_session = session
             await db.commit()
             logger.info("Sleep mode activated")
-            return {"ok": True, "work_session": session, "message": "Спокойной ночи! Не буду трогать до утра."}
+            return {
+                "ok": True,
+                "work_session": {"type": "sleep", "started_local": datetime.now(tz).isoformat()},
+                "message": "Спокойной ночи! Не буду трогать до утра.",
+            }
 
         # If there's already an active session for the same task, don't reset it
         existing_session = ctx.work_session
@@ -1288,9 +1303,17 @@ class NiniBrain:
                 await db.commit()
                 interval = int(estimate_min / 3)
                 logger.info("Work session updated with estimate: task='%s' estimate=%s", task_title, estimate_min)
-                return {"ok": True, "work_session": existing_session, "message": f"Ок, оценка {estimate_min} мин. Буду проверять каждые {interval} мин."}
+                return {
+                    "ok": True,
+                    "work_session": _session_for_model(existing_session),
+                    "message": f"Ок, оценка {estimate_min} мин. Буду проверять каждые {interval} мин.",
+                }
             logger.info("Work session already active for '%s', not resetting", task_title)
-            return {"ok": True, "work_session": existing_session, "message": f"Уже отслеживаю «{task_title}» — таймер идёт."}
+            return {
+                "ok": True,
+                "work_session": _session_for_model(existing_session),
+                "message": f"Уже отслеживаю «{task_title}» — таймер идёт.",
+            }
 
         session = {
             "task_title": task_title,
@@ -1311,7 +1334,7 @@ class NiniBrain:
             msg += ". Буду проверять каждые 5 минут, пока не дашь оценку."
 
         logger.info("Work session set: task='%s' estimate=%s", task_title, estimate_min)
-        return {"ok": True, "work_session": session, "message": msg}
+        return {"ok": True, "work_session": _session_for_model(session), "message": msg}
 
     async def _tool_clear_work_session(self, db: AsyncSession) -> dict:
         """Clear the active work session when user is done with the task."""
@@ -1385,3 +1408,67 @@ def _task_to_dict(task: UnifiedTask) -> dict:
         "assignees": [a.get("username", a.get("id")) for a in (task.assignees or [])],
         "url": task.clickup_url,
     }
+
+
+def _parse_due_date_input(raw_value: str) -> datetime:
+    """Parse due date text/ISO into timezone-aware UTC datetime.
+
+    Relative words are interpreted in Asia/Yerevan timezone.
+    """
+    s = str(raw_value).strip().lower()
+    now_local = datetime.now(USER_TZ)
+    today = now_local.date()
+
+    relative_map = {
+        "today": 0,
+        "сегодня": 0,
+        "tomorrow": 1,
+        "завтра": 1,
+        "послезавтра": 2,
+    }
+    if s in relative_map:
+        target = today + timedelta(days=relative_map[s])
+        dt_local = datetime(target.year, target.month, target.day, 18, 0, tzinfo=USER_TZ)
+        return dt_local.astimezone(timezone.utc)
+
+    value = str(raw_value).strip()
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        # Accept YYYY-MM-DD
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            y, m, d = [int(x) for x in value.split("-")]
+            dt_local = datetime(y, m, d, 18, 0, tzinfo=USER_TZ)
+            dt = dt_local
+        else:
+            raise ValueError(
+                "Invalid due_date format. Use ISO datetime/date or relative words: today/tomorrow/сегодня/завтра."
+            ) from None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=USER_TZ)
+
+    dt_utc = dt.astimezone(timezone.utc)
+    # Safety guard: reject suspiciously old dates (likely LLM misinterpretation)
+    if dt_utc < datetime.now(timezone.utc) - timedelta(days=365):
+        raise ValueError("due_date appears too far in the past. Please provide the date explicitly.")
+    return dt_utc
+
+
+def _session_for_model(session: dict) -> dict:
+    """Return safe session representation for LLM context in local timezone."""
+    out = {
+        "task_title": session.get("task_title"),
+        "estimate_min": session.get("estimate_min"),
+        "checks_done": session.get("checks_done", 0),
+    }
+    started_at = session.get("started_at")
+    if started_at:
+        try:
+            dt = datetime.fromisoformat(started_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            out["started_local"] = dt.astimezone(USER_TZ).isoformat()
+        except Exception:
+            pass
+    return out
