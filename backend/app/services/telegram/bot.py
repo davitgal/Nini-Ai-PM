@@ -243,7 +243,15 @@ async def handle_message(message: Message) -> None:
         await message.answer(_truncate(response))
     except Exception as e:
         logger.exception("Error processing message")
-        await message.answer(f"Блин, что-то сломалось: <code>{e}</code>")
+        err_msg = str(e).lower()
+        if "credit" in err_msg or "billing" in err_msg or "low" in err_msg:
+            await message.answer("Сейчас API-кредиты на нуле — попробуй через пару минут, пока баланс обновится 🔄")
+        elif "rate" in err_msg and "limit" in err_msg:
+            await message.answer("Слишком много запросов, подожди минутку ⏳")
+        elif "overloaded" in err_msg:
+            await message.answer("Claude перегружен — попробуй через минуту 🫠")
+        else:
+            await message.answer("Что-то пошло не так, попробуй ещё раз через пару секунд 🤔")
 
 
 async def _track_user_activity(text: str, category: str = "user_message") -> None:
