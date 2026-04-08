@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.dependencies import DAVIT_USER_ID
+from app.models.daily_context import DailyContext
 from app.models.daily_plan import DailyPlan
 from app.models.task import UnifiedTask
 
@@ -56,6 +57,45 @@ async def _fetch_active_tasks(db: AsyncSession) -> list[UnifiedTask]:
         )
     )
     return list(result.scalars().all())
+
+
+def _extract_completion_signals(context: DailyContext | None) -> list[str]:
+    """Extract user-reported completion signals from daily interactions."""
+    if not context or not isinstance(context.interactions, list):
+        return []
+
+    done_markers = (
+        "готово",
+        "закончил",
+        "сделал",
+        "закрыл",
+        "done",
+        "finished",
+        "completed",
+    )
+    signals: list[str] = []
+    for item in context.interactions[-100:]:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "user_message":
+            continue
+        summary = str(item.get("summary", "")).strip()
+        if not summary:
+            continue
+        low = summary.lower()
+        if any(marker in low for marker in done_markers):
+            signals.append(summary[:120])
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for s in signals:
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(s)
+    return unique[:5]
 
 
 async def _call_claude(system: str, user_message: str) -> str:
@@ -197,6 +237,7 @@ class DailyPlanner:
         tomorrow = today + timedelta(days=1)
 
         morning = await _load_plan(db, today, "morning")
+        context = await _load_context(db, today)
         planned_ids = {t["id"] for t in (morning.must_do if morning else [])}
 
         tasks = await _fetch_active_tasks(db)
@@ -219,8 +260,11 @@ class DailyPlanner:
 
         total_planned = len(morning.must_do) if morning else 0
         productivity_pct = int(len(completed) / total_planned * 100) if total_planned > 0 else 0
+        completion_signals = _extract_completion_signals(context)
 
-        summary = await _generate_eod_summary(completed, not_completed, risks, productivity_pct)
+        summary = await _generate_eod_summary(
+            completed, not_completed, risks, productivity_pct, completion_signals
+        )
 
         plan = DailyPlan(
             id=uuid.uuid4(),
@@ -250,6 +294,16 @@ async def _load_plan(db: AsyncSession, plan_date: date, plan_type: str) -> Daily
             DailyPlan.user_id == DAVIT_USER_ID,
             DailyPlan.plan_date == plan_date,
             DailyPlan.plan_type == plan_type,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _load_context(db: AsyncSession, context_date: date) -> DailyContext | None:
+    result = await db.execute(
+        select(DailyContext).where(
+            DailyContext.user_id == DAVIT_USER_ID,
+            DailyContext.context_date == context_date,
         )
     )
     return result.scalar_one_or_none()
@@ -307,9 +361,10 @@ async def _generate_eod_summary(
     not_completed: list[dict],
     risks: list[dict],
     productivity_pct: int,
+    completion_signals: list[str],
 ) -> str:
     if not settings.anthropic_api_key:
-        return _fallback_eod(completed, not_completed, productivity_pct)
+        return _fallback_eod(completed, not_completed, productivity_pct, completion_signals)
 
     prompt = (
         "Конец рабочего дня. Подводим итоги.\n\n"
@@ -317,8 +372,11 @@ async def _generate_eod_summary(
         f"Не выполнено: {len(not_completed)} задач\n"
         f"Продуктивность: {productivity_pct}%\n"
         f"Риски на завтра: {json.dumps(risks[:3], ensure_ascii=False)}\n\n"
+        f"Сигналы из диалога о завершении задач (могут опережать sync): {json.dumps(completion_signals, ensure_ascii=False)}\n\n"
         "Напиши короткий итог дня: ключевые достижения, проблемные зоны, 1 рекомендацию на завтра. "
-        "Используй HTML теги. Максимум 200 слов. Будь честной — если день был продуктивным, скажи, если нет — тоже."
+        "Используй HTML теги. Максимум 200 слов. "
+        "Если есть сигналы из диалога о завершении — НЕ пиши 'достижений нет'. "
+        "В таком случае отметь, что часть закрытий подтверждена пользователем и может ждать финального sync."
     )
     return await _call_claude(NINI_VOICE_SYSTEM, prompt)
 
@@ -346,9 +404,16 @@ def _fallback_midday(must_do: list[dict], completed: list[dict], new_urgent: lis
     return "\n".join(lines)
 
 
-def _fallback_eod(completed: list[dict], not_completed: list[dict], productivity_pct: int) -> str:
+def _fallback_eod(
+    completed: list[dict],
+    not_completed: list[dict],
+    productivity_pct: int,
+    completion_signals: list[str],
+) -> str:
     lines = [f"<b>🌙 Итог дня</b>\n"]
     lines.append(f"✅ Выполнено: {len(completed)}")
     lines.append(f"⏳ Не выполнено: {len(not_completed)}")
     lines.append(f"📊 Продуктивность: {productivity_pct}%")
+    if completion_signals:
+        lines.append("🗣️ Есть подтвержденные пользователем закрытия задач (ожидают sync).")
     return "\n".join(lines)
