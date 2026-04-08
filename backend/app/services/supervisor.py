@@ -44,7 +44,7 @@ ON_TIME_WINDOW_MINUTES = 30
 
 # Proactive ping settings
 PING_INTERVAL_MINUTES = 15
-WORK_CHECK_NO_ESTIMATE_MINUTES = 30
+WORK_CHECK_NO_ESTIMATE_MINUTES = 5
 WORKING_HOURS_START = 10
 # No fixed end — Nini stops pinging only when user says goodnight
 # (sleep mode tracked via DailyContext.work_session = {"type": "sleep"})
@@ -222,6 +222,7 @@ class Supervisor:
             elapsed_min = (now_utc - started_at).total_seconds() / 60
             task_title = session.get("task_title", "задача")
             estimate_min = session.get("estimate_min")
+            last_ping = context.last_ping_at
 
             should_ping = False
             ping_reason = ""
@@ -245,7 +246,7 @@ class Supervisor:
                         ping_reason = "work_session_progress_check"
                     session["checks_done"] = checks_done + 1
             else:
-                # No estimate — check every 30 min
+                # No estimate — check every 5 min until user provides estimate
                 last_check_str = session.get("last_check_at")
                 if last_check_str:
                     last_check = datetime.fromisoformat(last_check_str)
@@ -258,6 +259,16 @@ class Supervisor:
                 session["last_check_at"] = now_utc.isoformat()
 
             if should_ping:
+                # Global anti-spam guard: if we pinged recently, skip this cycle.
+                # Prevents duplicate check-ins when supervisor ticks every 5 min
+                # or when multiple app instances overlap briefly.
+                min_gap_min = (estimate_min / 3) if estimate_min else WORK_CHECK_NO_ESTIMATE_MINUTES
+                if last_ping:
+                    lp = last_ping if last_ping.tzinfo else last_ping.replace(tzinfo=timezone.utc)
+                    since_last_ping_sec = (now_utc - lp).total_seconds()
+                    if since_last_ping_sec < min_gap_min * 60:
+                        return
+
                 msg = await self._generate_proactive_message(
                     db, context, ping_reason,
                     ping_count=context.ping_count or 0,
@@ -267,6 +278,8 @@ class Supervisor:
                 sent = await _send_to_user(msg)
                 if sent:
                     context.work_session = dict(session)
+                    context.last_ping_at = now_utc
+                    context.ping_count = (context.ping_count or 0) + 1
                     await db.commit()
                     logger.info("Work session ping sent: reason=%s, task='%s'", ping_reason, task_title)
                 else:

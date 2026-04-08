@@ -335,7 +335,7 @@ TOOLS = [
         "description": (
             "Call this when Davit says he's starting to work on a specific task — with or without "
             "a time estimate. This enables Nini to check in at the halfway point (if estimate given) "
-            "or every 30 minutes (no estimate), and ask for results when time is up. "
+            "or every 5 minutes (no estimate), and ask for results when time is up. "
             "Call this when user says things like: 'сейчас буду делать X', 'работаю над Y на 2 часа', "
             "'занимаюсь Z', 'начинаю X'. "
             "If the user gives a time estimate (e.g. '2 часа', '30 минут', '1.5 часа'), "
@@ -1236,7 +1236,7 @@ class NiniBrain:
             interval = int(estimate_min / 3)
             msg += f" ~{estimate_min} минут. Буду проверять каждые {interval} мин."
         else:
-            msg += ". Буду проверять каждые 30 минут."
+            msg += ". Буду проверять каждые 5 минут, пока не дашь оценку."
 
         logger.info("Work session set: task='%s' estimate=%s", task_title, estimate_min)
         return {"ok": True, "work_session": session, "message": msg}
