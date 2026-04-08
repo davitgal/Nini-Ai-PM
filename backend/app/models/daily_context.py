@@ -53,6 +53,10 @@ class DailyContext(Base, TenantMixin, TimestampMixin):
     # Set by Nini when user says they're working on something with a time estimate
     work_session: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # Conversation history: list of {role, content} messages for Claude context
+    # Persisted so Nini doesn't lose context after deploy/restart
+    conversation_history: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
     __table_args__ = (
         # One context record per user per day
         Index("idx_daily_contexts_user_date", "user_id", "context_date", unique=True),

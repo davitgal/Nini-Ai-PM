@@ -381,22 +381,123 @@ class NiniBrain:
 
     def __init__(self):
         self._client: anthropic.AsyncAnthropic | None = None
-        self._conversations: dict[int, list[dict]] = {}  # telegram_user_id -> messages
+        self._conversations: dict[int, list[dict]] = {}  # in-memory cache
+        self._history_loaded: dict[int, bool] = {}  # whether we loaded from DB
         self._last_activity: dict[int, datetime] = {}  # chat_id -> last message time
 
     def _get_client(self) -> anthropic.AsyncAnthropic:
         if self._client is None:
-            # Pass None if empty so SDK auto-reads ANTHROPIC_API_KEY from env directly
             self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key or None)
         return self._client
 
-    def _get_history(self, chat_id: int) -> list[dict]:
-        if chat_id not in self._conversations:
+    async def _get_history(self, chat_id: int) -> list[dict]:
+        """Get conversation history — loads from DB on first call after restart."""
+        if chat_id not in self._conversations or not self._history_loaded.get(chat_id):
+            await self._load_history_from_db(chat_id)
+            self._history_loaded[chat_id] = True
+        return self._conversations.get(chat_id, [])
+
+    async def _load_history_from_db(self, chat_id: int) -> None:
+        """Load conversation history from DailyContext. Falls back to yesterday if today is empty."""
+        from zoneinfo import ZoneInfo
+        from datetime import timedelta
+        from app.models.daily_context import DailyContext
+
+        tz = ZoneInfo("Asia/Yerevan")
+        today = datetime.now(tz).date()
+
+        try:
+            async with async_session_factory() as db:
+                # Try today first
+                result = await db.execute(
+                    select(DailyContext).where(
+                        DailyContext.user_id == DAVIT_USER_ID,
+                        DailyContext.context_date == today,
+                    )
+                )
+                ctx = result.scalar_one_or_none()
+                history = (ctx.conversation_history if ctx and ctx.conversation_history else None)
+
+                # If today is empty, load from yesterday
+                if not history:
+                    yesterday = today - timedelta(days=1)
+                    result = await db.execute(
+                        select(DailyContext).where(
+                            DailyContext.user_id == DAVIT_USER_ID,
+                            DailyContext.context_date == yesterday,
+                        )
+                    )
+                    y_ctx = result.scalar_one_or_none()
+                    if y_ctx and y_ctx.conversation_history:
+                        # Take last 10 messages from yesterday for context continuity
+                        history = y_ctx.conversation_history[-10:]
+                        logger.info("Loaded %d messages from yesterday's context", len(history))
+
+                if history:
+                    self._conversations[chat_id] = history
+                    logger.info("Loaded %d messages from DB for chat %d", len(history), chat_id)
+                else:
+                    self._conversations[chat_id] = []
+        except Exception:
+            logger.exception("Failed to load conversation history from DB")
             self._conversations[chat_id] = []
-        return self._conversations[chat_id]
+
+    async def _save_history_to_db(self, chat_id: int) -> None:
+        """Persist current conversation history to DailyContext."""
+        from zoneinfo import ZoneInfo
+        from app.models.daily_context import DailyContext
+
+        tz = ZoneInfo("Asia/Yerevan")
+        today = datetime.now(tz).date()
+        history = self._conversations.get(chat_id, [])
+
+        # Serialize: Claude content blocks aren't JSON-serializable as-is
+        serializable = []
+        for msg in history:
+            if msg["role"] == "assistant" and isinstance(msg.get("content"), list):
+                # Convert Anthropic content blocks to serializable format
+                content_serialized = []
+                for block in msg["content"]:
+                    if hasattr(block, "type"):
+                        if block.type == "text":
+                            content_serialized.append({"type": "text", "text": block.text})
+                        elif block.type == "tool_use":
+                            content_serialized.append({
+                                "type": "tool_use",
+                                "id": block.id,
+                                "name": block.name,
+                                "input": block.input,
+                            })
+                    elif isinstance(block, dict):
+                        content_serialized.append(block)
+                serializable.append({"role": "assistant", "content": content_serialized})
+            else:
+                serializable.append(msg)
+
+        try:
+            async with async_session_factory() as db:
+                result = await db.execute(
+                    select(DailyContext).where(
+                        DailyContext.user_id == DAVIT_USER_ID,
+                        DailyContext.context_date == today,
+                    )
+                )
+                ctx = result.scalar_one_or_none()
+                if not ctx:
+                    ctx = DailyContext(
+                        id=uuid.uuid4(),
+                        user_id=DAVIT_USER_ID,
+                        context_date=today,
+                    )
+                    db.add(ctx)
+                ctx.conversation_history = serializable
+                await db.commit()
+        except Exception:
+            logger.exception("Failed to save conversation history to DB")
 
     def clear_history(self, chat_id: int) -> None:
         self._conversations.pop(chat_id, None)
+        self._history_loaded.pop(chat_id, None)
 
     def has_activity(self, chat_id: int) -> bool:
         """True if there's been at least one interaction since process start."""
@@ -406,7 +507,6 @@ class NiniBrain:
         """Check if 30+ minutes passed since last interaction (in-memory only)."""
         last = self._last_activity.get(chat_id)
         if last is None:
-            # First call after restart — caller should check DB before trusting this
             return True
         elapsed = (datetime.now(timezone.utc) - last).total_seconds()
         return elapsed >= SYNC_COOLDOWN_MINUTES * 60
@@ -447,7 +547,7 @@ class NiniBrain:
 
     async def chat(self, chat_id: int, user_message: str) -> str:
         """Process a user message and return Nini's response."""
-        history = self._get_history(chat_id)
+        history = await self._get_history(chat_id)
         history.append({"role": "user", "content": user_message})
 
         # Keep conversation history manageable (last 20 messages)
@@ -478,6 +578,8 @@ class NiniBrain:
                 text_parts = [
                     block.text for block in assistant_content if block.type == "text"
                 ]
+                # Persist conversation to DB (non-blocking, don't fail the response)
+                await self._save_history_to_db(chat_id)
                 return "\n".join(text_parts) if text_parts else "..."
 
             # Process tool calls
