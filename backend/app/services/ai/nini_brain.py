@@ -548,6 +548,10 @@ class NiniBrain:
     async def chat(self, chat_id: int, user_message: str) -> str:
         """Process a user message and return Nini's response."""
         history = await self._get_history(chat_id)
+
+        # Snapshot length before adding — rollback on API failure to keep history valid
+        history_len_before = len(history)
+
         history.append({"role": "user", "content": user_message})
 
         # Keep conversation history manageable (last 20 messages)
@@ -557,46 +561,53 @@ class NiniBrain:
         # Build system prompt with memories
         system_prompt = await self._build_system_prompt()
 
-        # Agentic loop: keep calling Claude until we get a text response (no more tool calls)
-        while True:
-            response = await self._get_client().messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=2048,
-                system=system_prompt,
-                tools=TOOLS,
-                messages=history,
-            )
+        try:
+            # Agentic loop: keep calling Claude until we get a text response (no more tool calls)
+            while True:
+                response = await self._get_client().messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=2048,
+                    system=system_prompt,
+                    tools=TOOLS,
+                    messages=history,
+                )
 
-            # Collect all content blocks
-            assistant_content = response.content
+                # Collect all content blocks
+                assistant_content = response.content
 
-            # Add assistant response to history
-            history.append({"role": "assistant", "content": assistant_content})
+                # Add assistant response to history
+                history.append({"role": "assistant", "content": assistant_content})
 
-            # If stop reason is end_turn (no tool use), extract text and return
-            if response.stop_reason == "end_turn":
-                text_parts = [
-                    block.text for block in assistant_content if block.type == "text"
-                ]
-                # Persist conversation to DB (non-blocking, don't fail the response)
-                await self._save_history_to_db(chat_id)
-                return "\n".join(text_parts) if text_parts else "..."
+                # If stop reason is end_turn (no tool use), extract text and return
+                if response.stop_reason == "end_turn":
+                    text_parts = [
+                        block.text for block in assistant_content if block.type == "text"
+                    ]
+                    # Persist conversation to DB (non-blocking, don't fail the response)
+                    await self._save_history_to_db(chat_id)
+                    return "\n".join(text_parts) if text_parts else "..."
 
-            # Process tool calls
-            tool_results = []
-            for block in assistant_content:
-                if block.type == "tool_use":
-                    result = await self._execute_tool(block.name, block.input)
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": json.dumps(result, ensure_ascii=False, default=str),
-                        }
-                    )
+                # Process tool calls
+                tool_results = []
+                for block in assistant_content:
+                    if block.type == "tool_use":
+                        result = await self._execute_tool(block.name, block.input)
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": json.dumps(result, ensure_ascii=False, default=str),
+                            }
+                        )
 
-            if tool_results:
-                history.append({"role": "user", "content": tool_results})
+                if tool_results:
+                    history.append({"role": "user", "content": tool_results})
+
+        except Exception:
+            # Rollback history to pre-call state — prevents corrupted user→user chain
+            # that would cause all subsequent requests to fail too
+            history[:] = history[:history_len_before]
+            raise
 
     async def _execute_tool(self, name: str, params: dict) -> dict:
         """Execute a tool and return results."""
