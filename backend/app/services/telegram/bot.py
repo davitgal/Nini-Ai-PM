@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import random
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
@@ -158,29 +157,6 @@ async def cmd_briefing(message: Message) -> None:
     await message.answer(_truncate(response))
 
 
-_SYNC_CHECKING_MSGS = [
-    "Сек, гляну что там...",
-    "Подожди, обновляю данные 🔄",
-    "Минуту, проверяю ClickUp...",
-    "Давно не виделись — дай обновлюсь",
-    "Сек, синкаюсь...",
-]
-
-_SYNC_NO_CHANGES_MSGS = [
-    "Всё на месте, изменений нет.",
-    "Без изменений с последнего раза.",
-    "ClickUp тихий, всё актуально.",
-    "Ничего нового — можем работать.",
-    "Всё чисто, давай.",
-]
-
-_SYNC_CHANGED_MSGS = [
-    "Обновил: {}.",
-    "Есть изменения: {}.",
-    "Поймал: {}.",
-    "Свежак: {}.",
-]
-
 
 async def _auto_sync_if_needed(message: Message) -> bool:
     """Run incremental sync if 30+ min since last interaction. Returns True if sync ran.
@@ -219,8 +195,6 @@ async def _auto_sync_if_needed(message: Message) -> bool:
         return False
 
     brain.touch_activity(chat_id)
-    await message.answer(random.choice(_SYNC_CHECKING_MSGS))
-    await message.chat.do("typing")
 
     try:
         async with async_session_factory() as db:
@@ -243,20 +217,12 @@ async def _auto_sync_if_needed(message: Message) -> bool:
                 except Exception:
                     logger.exception("Auto-sync failed for %s", ws.name)
 
-        parts = []
-        if total_created:
-            parts.append(f"+{total_created} новых")
-        if total_updated:
-            parts.append(f"{total_updated} обновлено")
-        if total_archived:
-            parts.append(f"{total_archived} в архив")
-        if parts:
-            await message.answer(random.choice(_SYNC_CHANGED_MSGS).format(", ".join(parts)))
-        else:
-            await message.answer(random.choice(_SYNC_NO_CHANGES_MSGS))
+        total_changes = total_created + total_updated + total_archived
+        if total_changes:
+            logger.info("Auto-sync: +%d created, %d updated, %d archived", total_created, total_updated, total_archived)
     except Exception:
         logger.exception("Auto-sync error")
-        await message.answer("Синк не прошёл, но ладно — работаем с тем что есть. Что хотел?")
+        pass  # Sync failed silently — we work with what we have
 
     return True
 
