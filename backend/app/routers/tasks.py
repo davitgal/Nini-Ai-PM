@@ -30,6 +30,8 @@ async def list_tasks(
     sort_order: str = "desc",
     page: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    unresolved_only: bool = False,
+    include_total: bool = True,
     db: AsyncSession = Depends(get_db),
     user_id: uuid.UUID = Depends(get_current_user_id),
 ):
@@ -57,10 +59,14 @@ async def list_tasks(
         query = query.where(UnifiedTask.due_date >= due_after)
     if search:
         query = query.where(UnifiedTask.title.ilike(f"%{search}%"))
+    if unresolved_only:
+        query = query.where(UnifiedTask.status_type.notin_(["done", "closed"]))
 
-    # Count total before pagination
-    count_query = select(func.count()).select_from(query.subquery())
-    total = (await db.execute(count_query)).scalar() or 0
+    total = 0
+    if include_total:
+        # Count total before pagination (expensive on large datasets, opt-out for fast dashboard lists)
+        count_query = select(func.count()).select_from(query.subquery())
+        total = (await db.execute(count_query)).scalar() or 0
 
     # Sorting
     sort_col = getattr(UnifiedTask, sort_by, UnifiedTask.date_updated)
@@ -74,6 +80,10 @@ async def list_tasks(
 
     result = await db.execute(query)
     tasks = result.scalars().all()
+
+    # If total count was skipped, return the page size as lightweight total.
+    if not include_total:
+        total = len(tasks)
 
     return TaskListResponse(
         tasks=[TaskResponse.model_validate(t) for t in tasks],

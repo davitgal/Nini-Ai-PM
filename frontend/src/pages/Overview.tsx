@@ -13,6 +13,8 @@ export default function Overview() {
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['stats'],
     queryFn: fetchStats,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   })
 
   const now = new Date()
@@ -23,10 +25,14 @@ export default function Overview() {
     queryFn: () =>
       fetchTasks({
         due_before: now.toISOString(),
+        unresolved_only: 'true',
+        include_total: 'false',
         sort_by: 'due_date',
         sort_order: 'asc',
         limit: '20',
       }),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   })
 
   const { data: weekTasks } = useQuery({
@@ -35,15 +41,21 @@ export default function Overview() {
       fetchTasks({
         due_after: now.toISOString(),
         due_before: weekLater.toISOString(),
+        unresolved_only: 'true',
+        include_total: 'false',
         sort_by: 'due_date',
         sort_order: 'asc',
         limit: '20',
       }),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   })
 
   const { data: issuesData, isLoading: issuesLoading } = useQuery({
     queryKey: ['nini-issues'],
     queryFn: () => fetchNiniIssues({ limit: '30' }),
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
   })
 
   const createIssue = useMutation({
@@ -63,32 +75,6 @@ export default function Overview() {
       queryClient.invalidateQueries({ queryKey: ['nini-issues'] })
     },
   })
-
-  if (statsLoading) {
-    return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '80px 20px',
-        color: '#6b6b85',
-        fontSize: '14px',
-      }}>
-        <span style={{
-          display: 'inline-block',
-          width: '16px',
-          height: '16px',
-          border: '2px solid #2a2a3d',
-          borderTopColor: '#8b5cf6',
-          borderRadius: '50%',
-          animation: 'spin 0.8s linear infinite',
-          marginRight: '10px',
-        }} />
-        Загрузка...
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      </div>
-    )
-  }
 
   const overdueFiltered = overdueTasks?.tasks.filter(
     (t) => t.status_type !== 'done' && t.status_type !== 'closed'
@@ -139,7 +125,7 @@ export default function Overview() {
           color={stats?.overdue ? 'red' : 'green'}
           icon={stats?.overdue ? '🔴' : '✅'}
         />
-        <StatCard title="На этой неделе" value={weekTasks?.total ?? 0} color="blue" icon="📅" />
+        <StatCard title="На этой неделе" value={weekTasks?.tasks.length ?? 0} color="blue" icon="📅" />
         <StatCard
           title="Nini issues"
           value={openIssues.length}
@@ -147,6 +133,12 @@ export default function Overview() {
           icon={openIssues.length > 0 ? '🧩' : '✅'}
         />
       </div>
+
+      {statsLoading && (
+        <div style={{ color: '#6b6b85', fontSize: '12px', marginTop: '-20px', marginBottom: '20px' }}>
+          Обновляю статистику...
+        </div>
+      )}
 
       {/* Nini issues backlog */}
       <div style={{
