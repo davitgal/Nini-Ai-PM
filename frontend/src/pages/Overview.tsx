@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createNiniIssue, fetchNiniIssues, fetchStats, fetchTasks, updateNiniIssue } from '../api/client'
 import StatCard from '../components/StatCard'
@@ -94,10 +94,7 @@ export default function Overview() {
     (t) => t.status_type !== 'done' && t.status_type !== 'closed'
   ) ?? []
   const issues = issuesData?.items ?? []
-  const openIssues = useMemo(
-    () => issues.filter((i) => i.status !== 'fixed' && i.status !== 'ignored'),
-    [issues]
-  )
+  const openIssues = issues.filter((i) => i.status !== 'fixed' && i.status !== 'ignored')
 
   function severityColor(severity: string): string {
     if (severity === 'critical') return '#f87171'
@@ -144,117 +141,11 @@ export default function Overview() {
         />
         <StatCard title="На этой неделе" value={weekTasks?.total ?? 0} color="blue" icon="📅" />
         <StatCard
-          title="Компании"
-          value={Object.keys(stats?.by_company ?? {}).length}
-          color="default"
-          icon="🏢"
-        />
-        <StatCard
           title="Nini issues"
           value={openIssues.length}
           color={openIssues.length > 0 ? 'red' : 'green'}
           icon={openIssues.length > 0 ? '🧩' : '✅'}
         />
-      </div>
-
-      {/* Two-column breakdown */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-        gap: '20px',
-        marginBottom: '32px',
-      }}>
-        {/* By company */}
-        <div>
-          <h2 style={{
-            fontSize: '14px',
-            fontWeight: 600,
-            color: '#9898b0',
-            margin: '0 0 12px',
-            letterSpacing: '0.01em',
-          }}>
-            По компаниям
-          </h2>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {Object.entries(stats?.by_company ?? {})
-              .sort(([, a], [, b]) => b - a)
-              .map(([company, count]) => (
-                <div
-                  key={company}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '8px 14px',
-                    borderRadius: '8px',
-                    background: 'rgba(18, 18, 26, 0.6)',
-                    border: '1px solid #1e1e30',
-                    transition: 'background 0.1s',
-                    cursor: 'default',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(26, 26, 40, 0.8)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(18, 18, 26, 0.6)')}
-                >
-                  <span style={{ fontSize: '13px', color: '#c8c8d8' }}>{company}</span>
-                  <span style={{
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    color: '#a78bfa',
-                    minWidth: '28px',
-                    textAlign: 'right',
-                  }}>
-                    {count}
-                  </span>
-                </div>
-              ))}
-          </div>
-        </div>
-
-        {/* By status */}
-        <div>
-          <h2 style={{
-            fontSize: '14px',
-            fontWeight: 600,
-            color: '#9898b0',
-            margin: '0 0 12px',
-            letterSpacing: '0.01em',
-          }}>
-            По статусам
-          </h2>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {Object.entries(stats?.by_status ?? {})
-              .sort(([, a], [, b]) => b - a)
-              .map(([status, count]) => (
-                <div
-                  key={status}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '8px 14px',
-                    borderRadius: '8px',
-                    background: 'rgba(18, 18, 26, 0.6)',
-                    border: '1px solid #1e1e30',
-                    transition: 'background 0.1s',
-                    cursor: 'default',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(26, 26, 40, 0.8)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(18, 18, 26, 0.6)')}
-                >
-                  <span style={{ fontSize: '13px', color: '#c8c8d8' }}>{status}</span>
-                  <span style={{
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    color: '#9898b0',
-                    minWidth: '28px',
-                    textAlign: 'right',
-                  }}>
-                    {count}
-                  </span>
-                </div>
-              ))}
-          </div>
-        </div>
       </div>
 
       {/* Nini issues backlog */}
