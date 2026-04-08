@@ -19,6 +19,26 @@ from app.schemas.nini_issue import (
 router = APIRouter(prefix="/api/v1/nini-issues", tags=["nini-issues"])
 
 
+def _to_response(issue: NiniIssue) -> NiniIssueResponse:
+    """Map ORM model to API schema explicitly."""
+    return NiniIssueResponse(
+        id=issue.id,
+        title=issue.title,
+        description=issue.description,
+        issue_type=issue.issue_type,
+        severity=issue.severity,
+        status=issue.status,
+        source=issue.source,
+        task_title=issue.task_title,
+        conversation_snippet=issue.conversation_snippet,
+        metadata=issue.metadata_ or {},
+        resolved_at=issue.resolved_at,
+        resolution_notes=issue.resolution_notes,
+        created_at=issue.created_at,
+        updated_at=issue.updated_at,
+    )
+
+
 @router.get("", response_model=NiniIssueListResponse)
 async def list_nini_issues(
     status: str | None = None,
@@ -39,7 +59,7 @@ async def list_nini_issues(
     query = query.order_by(NiniIssue.created_at.desc()).limit(limit)
     rows = (await db.execute(query)).scalars().all()
     return NiniIssueListResponse(
-        items=[NiniIssueResponse.model_validate(i) for i in rows],
+        items=[_to_response(i) for i in rows],
         total=total,
     )
 
@@ -65,7 +85,7 @@ async def create_nini_issue(
     db.add(issue)
     await db.commit()
     await db.refresh(issue)
-    return NiniIssueResponse.model_validate(issue)
+    return _to_response(issue)
 
 
 @router.patch("/{issue_id}", response_model=NiniIssueResponse)
@@ -101,4 +121,4 @@ async def update_nini_issue(
 
     await db.commit()
     await db.refresh(issue)
-    return NiniIssueResponse.model_validate(issue)
+    return _to_response(issue)
