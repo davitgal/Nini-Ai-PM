@@ -3,7 +3,9 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -16,6 +18,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import async_session_factory
 from app.dependencies import DAVIT_USER_ID
+from app.models.daily_context import DailyContext
 from app.models.workspace import Workspace
 from app.services.ai.nini_brain import NiniBrain
 from app.services.sync_engine import SyncEngine
@@ -67,6 +70,7 @@ router.message.middleware(OwnerOnlyMiddleware())
 
 # Telegram has a 4096 character limit per message
 TG_MAX_LENGTH = 4096
+USER_TZ = ZoneInfo("Asia/Yerevan")
 
 
 def _normalize_telegram_html(text: str) -> str:
@@ -88,6 +92,64 @@ def _truncate(text: str, max_len: int = TG_MAX_LENGTH) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 20] + "\n\n... (обрезано)"
+
+
+def _extract_estimate_min(text: str) -> int | None:
+    """Extract rough estimate from RU/EN free text."""
+    s = text.lower().strip().replace(",", ".")
+
+    # e.g. "30 минут", "45 min"
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(минут|мин|минута|minutes?|mins?)\b", s)
+    if m:
+        return max(1, int(float(m.group(1))))
+
+    # e.g. "1.5 часа", "2 hour"
+    h = re.search(r"(\d+(?:\.\d+)?)\s*(часа|час|hours?|hrs?)\b", s)
+    if h:
+        return max(1, int(float(h.group(1)) * 60))
+
+    # textual "час", "полтора часа"
+    if re.search(r"\bполтора\s+час", s):
+        return 90
+    if re.search(r"\bчас\b", s):
+        return 60
+
+    return None
+
+
+async def _apply_estimate_to_active_session_if_missing(text: str) -> bool:
+    """Backend guard: if active session has no estimate, fill it from user text."""
+    estimate_min = _extract_estimate_min(text)
+    if not estimate_min:
+        return False
+
+    today = datetime.now(USER_TZ).date()
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(DailyContext).where(
+                DailyContext.user_id == DAVIT_USER_ID,
+                DailyContext.context_date == today,
+            )
+        )
+        ctx = result.scalar_one_or_none()
+        if not ctx or not isinstance(ctx.work_session, dict):
+            return False
+
+        session = dict(ctx.work_session)
+        if session.get("type") == "sleep":
+            return False
+        if session.get("estimate_min"):
+            return False
+        if not session.get("task_title"):
+            return False
+
+        session["estimate_min"] = estimate_min
+        session.pop("last_check_at", None)
+        session["updated_at"] = datetime.now(timezone.utc).isoformat()
+        ctx.work_session = session
+        await db.commit()
+        logger.info("Applied backend estimate fallback: task='%s' estimate=%s", session.get("task_title"), estimate_min)
+        return True
 
 
 @router.message(Command("start"))
@@ -251,6 +313,13 @@ async def handle_message(message: Message) -> None:
 
     # Track user activity for Supervisor's context-aware decisions
     asyncio.create_task(_track_user_activity(message.text, "free_text"))
+
+    # Deterministic fallback: if user gives estimate during active no-estimate session,
+    # update session even if LLM forgets to call set_work_session.
+    try:
+        await _apply_estimate_to_active_session_if_missing(message.text)
+    except Exception:
+        logger.debug("Estimate fallback skipped", exc_info=True)
 
     await _auto_sync_if_needed(message)
     await message.chat.do("typing")
