@@ -59,6 +59,15 @@ def resolve_company_tag(task: ClickUpTask, folder_name: str | None = None) -> st
     return None
 
 
+# ClickUp priority int → nini_priority string
+CLICKUP_TO_NINI_PRIORITY = {
+    1: "critical",  # urgent
+    2: "high",
+    3: "medium",    # normal
+    4: "low",
+}
+
+
 def compute_sync_hash(normalized: dict) -> str:
     """Compute MD5 hash of key task fields for change detection."""
     fields_to_hash = [
@@ -66,6 +75,7 @@ def compute_sync_hash(normalized: dict) -> str:
         str(normalized.get("description", "")),
         str(normalized.get("status", "")),
         str(normalized.get("clickup_priority")),
+        str(normalized.get("nini_priority", "none")),
         str(normalized.get("due_date")),
         str(normalized.get("start_date")),
         str(normalized.get("assignees")),
@@ -122,6 +132,7 @@ def normalize_task(
         "source": "clickup",
         # Priority
         "clickup_priority": priority_val,
+        "nini_priority": CLICKUP_TO_NINI_PRIORITY.get(priority_val, "none"),
         # Context
         "company_tag": company_tag,
         "task_type_tag": task_type_tag,
