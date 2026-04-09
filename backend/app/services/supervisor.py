@@ -451,20 +451,20 @@ class Supervisor:
             UnifiedTask.archived.is_(False),
         ]
 
-        # Overdue
+        # Overdue = deadline strictly before today in Yerevan time (yesterday and earlier).
+        # Tasks due today are NOT overdue — the day isn't over yet.
+        yerevan_today = datetime.now(USER_TZ).date()
+        today_start = datetime(yerevan_today.year, yerevan_today.month, yerevan_today.day, tzinfo=USER_TZ).astimezone(timezone.utc)
+        today_end = today_start + timedelta(days=1)
+
         overdue_result = await db.execute(
             select(UnifiedTask).where(
                 *base,
-                UnifiedTask.due_date < now,
+                UnifiedTask.due_date < today_start,
                 UnifiedTask.status_type.notin_(["done", "closed"]),
             ).order_by(UnifiedTask.due_date.asc()).limit(5)
         )
         overdue = overdue_result.scalars().all()
-
-        # Due today (Yerevan time boundaries converted to UTC)
-        yerevan_today = datetime.now(USER_TZ).date()
-        today_start = datetime(yerevan_today.year, yerevan_today.month, yerevan_today.day, tzinfo=USER_TZ).astimezone(timezone.utc)
-        today_end = today_start + timedelta(days=1)
         due_today_result = await db.execute(
             select(UnifiedTask).where(
                 *base,

@@ -41,7 +41,13 @@ def _task_compact(t: UnifiedTask) -> dict:
 
 
 def _is_overdue(t: UnifiedTask, now: datetime) -> bool:
-    return bool(t.due_date and t.due_date < now and t.status_type not in ("done", "closed"))
+    # A task is overdue only if its deadline is strictly before today in Yerevan time.
+    # Tasks due today are not overdue — the day isn't over yet.
+    if not t.due_date or t.status_type in ("done", "closed"):
+        return False
+    today_yerevan = now.astimezone(USER_TZ).date()
+    due_date_yerevan = t.due_date.astimezone(USER_TZ).date() if t.due_date.tzinfo else t.due_date.date()
+    return due_date_yerevan < today_yerevan
 
 
 def _is_due_today(t: UnifiedTask, today: date) -> bool:
