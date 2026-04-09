@@ -146,6 +146,14 @@ class Supervisor:
 
             setattr(state, f"{plan_type}_status", "done")
             setattr(state, f"{plan_type}_executed_at", now.astimezone(timezone.utc))
+
+            # Morning ritual starts a new day — clear any stale sleep session.
+            # Sleep set after midnight lands in today's context and would block
+            # all proactive pings forever without this reset.
+            if plan_type == "morning" and context.work_session and context.work_session.get("type") == "sleep":
+                context.work_session = None
+                logger.info("Cleared stale sleep session on morning ritual start")
+
             await db.commit()
 
             from app.services.ai.adaptive_messenger import decide_tone

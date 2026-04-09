@@ -25,5 +25,8 @@ async def daily_jobs_loop() -> None:
     logger.info("Daily jobs loop started — supervisor mode (timezone: Asia/Yerevan)")
 
     while True:
-        await supervisor.run_cycle()
+        try:
+            await supervisor.run_cycle()
+        except Exception:
+            logger.exception("Supervisor cycle crashed — loop will continue in 5 minutes")
         await asyncio.sleep(300)  # Check every 5 minutes
