@@ -117,6 +117,51 @@ def _extract_estimate_min(text: str) -> int | None:
     return None
 
 
+def _is_sleep_intent(text: str) -> bool:
+    """Detect if user is saying they're going to sleep."""
+    s = text.lower().strip()
+    patterns = [
+        r"\bспать\b", r"\bсплю\b", r"\bспокойной\b", r"\bночи\b",
+        r"\bgoodnight\b", r"\bgood\s+night\b",
+        r"иду спать", r"ухожу спать", r"пойду спать", r"погнали спать",
+        r"буду спать", r"ложусь спать", r"ложусь",
+        r"не трогай меня", r"отстань до утра",
+    ]
+    return any(re.search(p, s) for p in patterns)
+
+
+async def _apply_sleep_mode_if_detected(text: str) -> bool:
+    """Backend guard: if user says they're going to sleep, set sleep session directly.
+    This runs before brain.chat so sleep is guaranteed even if LLM misses the intent.
+    """
+    if not _is_sleep_intent(text):
+        return False
+
+    today = datetime.now(USER_TZ).date()
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(DailyContext).where(
+                DailyContext.user_id == DAVIT_USER_ID,
+                DailyContext.context_date == today,
+            )
+        )
+        ctx = result.scalar_one_or_none()
+        if not ctx:
+            from app.models.daily_context import DailyContext as DC
+            import uuid as _uuid
+            ctx = DC(
+                id=_uuid.uuid4(),
+                user_id=DAVIT_USER_ID,
+                context_date=today,
+            )
+            db.add(ctx)
+
+        ctx.work_session = {"type": "sleep", "started_at": datetime.now(timezone.utc).isoformat()}
+        await db.commit()
+        logger.info("Sleep mode applied via deterministic fallback")
+        return True
+
+
 async def _apply_estimate_to_active_session_if_missing(text: str) -> bool:
     """Backend guard: if active session has no estimate, fill it from user text."""
     estimate_min = _extract_estimate_min(text)
@@ -313,6 +358,13 @@ async def handle_message(message: Message) -> None:
 
     # Track user activity for Supervisor's context-aware decisions
     asyncio.create_task(_track_user_activity(message.text, "free_text"))
+
+    # Deterministic sleep guard: if user says goodnight, set sleep session immediately
+    # before brain.chat — guarantees pings stop even if LLM misses the intent.
+    try:
+        await _apply_sleep_mode_if_detected(message.text)
+    except Exception:
+        logger.debug("Sleep mode fallback skipped", exc_info=True)
 
     # Deterministic fallback: if user gives estimate during active no-estimate session,
     # update session even if LLM forgets to call set_work_session.
