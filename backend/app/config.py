@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Anthropic (Phase 2)
     anthropic_api_key: str = ""
 
+    # OpenAI (Whisper for voice messages)
+    openai_api_key: str = ""
+
     # Telegram (Phase 2)
     telegram_bot_token: str = ""
     telegram_owner_id: int = 0

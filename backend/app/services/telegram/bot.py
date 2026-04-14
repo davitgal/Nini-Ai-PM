@@ -350,6 +350,79 @@ async def _auto_sync_if_needed(message: Message) -> bool:
     return True
 
 
+@router.message(F.voice)
+async def handle_voice(message: Message) -> None:
+    """Transcribe voice messages via Whisper and process as text."""
+    if not message.voice:
+        return
+
+    if not settings.openai_api_key:
+        await message.answer("Голосовые пока не работают — нет OpenAI ключа для Whisper")
+        return
+
+    await message.chat.do("typing")
+    try:
+        import tempfile
+        from openai import AsyncOpenAI
+
+        bot: Bot = message.bot  # type: ignore[assignment]
+        file = await bot.get_file(message.voice.file_id)
+        bio = await bot.download_file(file.file_path)
+
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=True) as tmp:
+            tmp.write(bio.read())
+            tmp.flush()
+
+            client = AsyncOpenAI(api_key=settings.openai_api_key)
+            with open(tmp.name, "rb") as audio_file:
+                transcription = await client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    language="ru",
+                )
+
+        text = transcription.text.strip()
+        if not text:
+            await message.answer("Не удалось распознать голосовое — попробуй ещё раз")
+            return
+
+        logger.info("Voice transcribed (%d chars): %s", len(text), text[:80])
+    except Exception:
+        logger.exception("Voice transcription failed")
+        await message.answer("Не смогла распознать голосовое 😕 Попробуй текстом или ещё раз")
+        return
+
+    # Process transcribed text through the same pipeline as text messages
+    asyncio.create_task(_track_user_activity(text, "voice_message"))
+
+    try:
+        await _apply_sleep_mode_if_detected(text)
+    except Exception:
+        logger.debug("Sleep mode fallback skipped", exc_info=True)
+
+    try:
+        await _apply_estimate_to_active_session_if_missing(text)
+    except Exception:
+        logger.debug("Estimate fallback skipped", exc_info=True)
+
+    await _auto_sync_if_needed(message)
+    await message.chat.do("typing")
+    try:
+        response = await brain.chat(message.chat.id, text)
+        await message.answer(_truncate(response))
+    except Exception as e:
+        logger.exception("Error processing voice message")
+        err_msg = str(e).lower()
+        if "credit" in err_msg or "billing" in err_msg or "low" in err_msg:
+            await message.answer("Сейчас API-кредиты на нуле — попробуй через пару минут 🔄")
+        elif "rate" in err_msg and "limit" in err_msg:
+            await message.answer("Слишком много запросов, подожди минутку ⏳")
+        elif "overloaded" in err_msg:
+            await message.answer("Claude перегружен — попробуй через минуту 🫠")
+        else:
+            await message.answer("Что-то пошло не так, попробуй ещё раз через пару секунд 🤔")
+
+
 @router.message(F.text)
 async def handle_message(message: Message) -> None:
     """Forward free-text messages to Nini Brain."""
