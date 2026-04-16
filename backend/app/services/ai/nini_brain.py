@@ -667,9 +667,10 @@ class NiniBrain:
 
         try:
             # Agentic loop: keep calling Claude until we get a text response (no more tool calls)
-            while True:
+            max_iterations = 10
+            for _iteration in range(max_iterations):
                 response = await self._get_client().messages.create(
-                    model="claude-sonnet-4-20250514",
+                    model="claude-haiku-4-5-20251001",
                     max_tokens=2048,
                     system=system_prompt,
                     tools=TOOLS,
@@ -687,9 +688,23 @@ class NiniBrain:
                     text_parts = [
                         block.text for block in assistant_content if block.type == "text"
                     ]
-                    # Persist conversation to DB (non-blocking, don't fail the response)
-                    await self._save_history_to_db(chat_id)
-                    return "\n".join(text_parts) if text_parts else "..."
+                    if text_parts:
+                        await self._save_history_to_db(chat_id)
+                        return "\n".join(text_parts)
+                    # Claude finished with only tool_use blocks and no text —
+                    # nudge it to produce a user-facing reply
+                    history.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "[system: ты выполнила действия, но не написала ответ пользователю. Напиши короткий ответ по результатам.]",
+                                }
+                            ],
+                        }
+                    )
+                    continue
 
                 # Process tool calls
                 tool_results = []
@@ -706,6 +721,10 @@ class NiniBrain:
 
                 if tool_results:
                     history.append({"role": "user", "content": tool_results})
+
+            # Exhausted iterations — return last text we have or a safe fallback
+            await self._save_history_to_db(chat_id)
+            return "Сделала, но не смогла сформулировать ответ — спроси ещё раз 😅"
 
         except Exception:
             # Rollback history to pre-call state — prevents corrupted user→user chain
