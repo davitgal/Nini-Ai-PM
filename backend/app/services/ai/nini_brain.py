@@ -529,6 +529,9 @@ class NiniBrain:
                     if y_ctx and y_ctx.conversation_history:
                         # Take last 10 messages from yesterday for context continuity
                         history = y_ctx.conversation_history[-10:]
+                        # Trim leading orphan tool_results — they crash the API if
+                        # the matching assistant/tool_use was sliced off
+                        history = self._trim_orphan_tool_results(history)
                         logger.info("Loaded %d messages from yesterday's context", len(history))
 
                 if history:
@@ -539,6 +542,34 @@ class NiniBrain:
         except Exception:
             logger.exception("Failed to load conversation history from DB")
             self._conversations[chat_id] = []
+
+    @staticmethod
+    def _trim_orphan_tool_results(history: list[dict]) -> list[dict]:
+        """Drop leading messages that are orphan tool_results.
+
+        When we slice the last N messages from yesterday, the first message
+        might be a user/tool_result whose matching assistant/tool_use was
+        cut off. The Anthropic API rejects such sequences.
+        Also ensure history starts with a 'user' text message (not assistant).
+        """
+        while history:
+            msg = history[0]
+            content = msg.get("content")
+            # Drop user messages that contain tool_results (orphaned)
+            if msg.get("role") == "user" and isinstance(content, list):
+                has_tool_result = any(
+                    isinstance(b, dict) and b.get("type") == "tool_result"
+                    for b in content
+                )
+                if has_tool_result:
+                    history = history[1:]
+                    continue
+            # Drop leading assistant messages (must start with user)
+            if msg.get("role") == "assistant":
+                history = history[1:]
+                continue
+            break
+        return history
 
     async def _save_history_to_db(self, chat_id: int) -> None:
         """Persist current conversation history to DailyContext."""
@@ -660,7 +691,7 @@ class NiniBrain:
 
         # Keep conversation history manageable (last 20 messages)
         if len(history) > 20:
-            history[:] = history[-20:]
+            history[:] = self._trim_orphan_tool_results(history[-20:])
 
         # Build system prompt with memories
         system_prompt = await self._build_system_prompt()
