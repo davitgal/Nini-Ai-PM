@@ -78,6 +78,10 @@ def _normalize_telegram_html(text: str) -> str:
     if not text:
         return text
 
+    # Strip Claude internal reasoning blocks — Telegram HTML parser rejects them.
+    text = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL)
+    text = text.lstrip()
+
     # Convert markdown links to Telegram-compatible HTML links.
     text = re.sub(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", r'<a href="\2">\1</a>', text)
     # Convert **bold** to <b>bold</b>.
