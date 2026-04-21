@@ -684,14 +684,15 @@ class NiniBrain:
         """Process a user message and return Nini's response."""
         history = await self._get_history(chat_id)
 
-        # Snapshot length before adding — rollback on API failure to keep history valid
-        history_len_before = len(history)
-
         history.append({"role": "user", "content": user_message})
 
         # Keep conversation history manageable (last 20 messages)
         if len(history) > 20:
             history[:] = self._trim_orphan_tool_results(history[-20:])
+
+        # Snapshot length AFTER trimming — rollback removes the new user message even
+        # when trimming shifted all indices (pre-trim snapshot would miss this case)
+        history_len_before = len(history) - 1
 
         # Build system prompt with memories
         system_prompt = await self._build_system_prompt()

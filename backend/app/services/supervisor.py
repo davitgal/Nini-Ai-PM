@@ -154,6 +154,10 @@ class Supervisor:
                 context.work_session = None
                 logger.info("Cleared stale sleep session on morning ritual start")
 
+            # Mark last_ping_at so the idle-ping guard blocks a follow-up ping
+            # in the same supervisor cycle (e.g. morning ritual + idle ping at 10:35).
+            context.last_ping_at = now.astimezone(timezone.utc)
+
             await db.commit()
 
             from app.services.ai.adaptive_messenger import decide_tone
